@@ -255,6 +255,35 @@ test("conductor budget guard — microscopic budget aborts before any surface", 
   assert.ok(existsSync(join(dir, "MANIFEST.sha256")));
 });
 
+test("conductor budget guard — live reservations make mid-range budgets honest", async (t) => {
+  // $0.007 fits ONE surface (browser reserve $0.005) but not browser+sandbox
+  // ($0.005 + $0.00285 = $0.00785). Without reservations each check passes in
+  // isolation and the run overspends — this is review finding #2.
+  const { config, artifactsRoot, scenario } = await boot(t);
+  const { factory, created } = makeFakeFactory(config);
+  const tight: Scenario = { ...scenario, budgetUsd: 0.007 };
+
+  const report = await runScenario(tight, config, {
+    surfaces: factory,
+    artifactsRoot,
+    predicateDeps,
+    logger: silentLogger,
+  });
+
+  assert.equal(report.ok, false);
+  // The browser was acquired (and disposed); the sandbox never was.
+  assert.equal(created.browsers.length, 1);
+  assert.equal(created.sandboxes.length, 0, "sandbox must be refused while the browser is live");
+  assert.equal(created.browsers[0]!.disposeCalls, 1);
+
+  const events = readJournal(join(artifactsRoot, report.runId));
+  const fails = events.filter((e) => e.type === "step.fail");
+  assert.match((fails[0] as { error: string }).error, /budget_exceeded/);
+  // Login and pull completed — the abort happens at reconcile.
+  const oks = events.filter((e) => e.type === "step.ok").map((e) => (e as { id: string }).id);
+  assert.deepEqual(oks, ["login", "pull"]);
+});
+
 test("conductor portal-auth failure — aborts on step one, never rewinds", async (t) => {
   const { config, artifactsRoot, scenario } = await boot(t);
   const badConfig: NoapiConfig = { ...config, portalPassword: "wrong-password" };

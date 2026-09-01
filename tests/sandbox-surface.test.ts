@@ -63,7 +63,9 @@ class FakeSandbox implements SandboxLike {
   readonly commands = {
     run: async (cmd: string, opts?: { args?: string[] }): Promise<CommandResultLike> => {
       this.runCalls.push({ cmd, args: opts?.args });
-      return this.runResults.get(cmd) ?? this.defaultRunResult;
+      // Most specific key first: "cmd arg0 arg1..." then bare "cmd".
+      const argKey = [cmd, ...(opts?.args ?? [])].join(" ");
+      return this.runResults.get(argKey) ?? this.runResults.get(cmd) ?? this.defaultRunResult;
     },
   };
 
@@ -222,17 +224,23 @@ test("reconcileLedger runs entirely inside the sandbox", async () => {
       "/work/invoices.zip",
     ]);
 
-    // Extraction happened in-VM via python's zipfile module (sh argv form).
-    const extractCall = sandbox.runCalls.find((c) => c.cmd === "sh" && c.args?.[1]?.includes("zipfile"));
-    assert.ok(extractCall, "expected a zipfile extraction via sh");
-    assert.deepEqual(extractCall.args, [
-      "-c",
-      "cd /work && python3 -m zipfile -e invoices.zip invoices/",
-    ]);
+    // Extraction happened in-VM via python's zipfile module — pure argv,
+    // no shell interpolation of caller-supplied paths.
+    const extractCall = sandbox.runCalls.find(
+      (c) => c.cmd === "python3" && c.args?.includes("zipfile"),
+    );
+    assert.deepEqual(extractCall, {
+      cmd: "python3",
+      args: ["-m", "zipfile", "-e", "/work/invoices.zip", "/work/invoices/"],
+    });
 
     // reconcile.py ran with direct argv — never concatenated into a shell.
-    const pyCall = sandbox.runCalls.find((c) => c.cmd === "python3");
+    const pyCall = sandbox.runCalls.find((c) => c.cmd === "python3" && c.args?.[0]?.endsWith("reconcile.py"));
     assert.deepEqual(pyCall, { cmd: "python3", args: ["/work/reconcile.py", "/work"] });
+
+    // mkdir via argv too (no `sh -c "mkdir -p ${workdir}"` interpolation).
+    const mkdirCall = sandbox.runCalls.find((c) => c.cmd === "mkdir");
+    assert.deepEqual(mkdirCall, { cmd: "mkdir", args: ["-p", "/work"] });
 
     // The laptop never parsed invoices: no read of the zip back, no local csv.
     assert.ok(logs.some((l) => l === "sandbox.reconcile exceptions=2"));
@@ -251,7 +259,9 @@ test("reconcileLedger throws with stdout when reconcile.py exits non-zero", asyn
     await writeFile(join(dir, "invoices.zip"), new Uint8Array([0x50, 0x4b]));
 
     const { sandbox, surface } = harness();
-    sandbox.runResults.set("python3", { stdout: "boom: ledger empty", exitCode: 1 });
+    // Key by full argv: the extract (python3 -m zipfile ...) must succeed
+    // while the reconcile call itself fails.
+    sandbox.runResults.set("python3 /work/reconcile.py /work", { stdout: "boom: ledger empty", exitCode: 1 });
     await surface.start({ heartbeatMs: 0 });
     await assert.rejects(
       () => surface.reconcileLedger({ zipPath: join(dir, "invoices.zip"), fixturesDir: dir }),

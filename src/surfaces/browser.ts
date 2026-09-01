@@ -173,6 +173,7 @@ export class SolariBrowserSurface implements BrowserSurface {
     if (wantStealth) launchOpts.stealth = true;
     if (profileId) launchOpts.profileId = profileId;
 
+    let stealthUsed = wantStealth;
     try {
       this.#browser = await solari.launch(launchOpts);
     } catch (err) {
@@ -183,11 +184,12 @@ export class SolariBrowserSurface implements BrowserSurface {
       const plain: BrowserLaunchOptions = { recording: true };
       if (profileId) plain.profileId = profileId;
       this.#browser = await solari.launch(plain);
+      stealthUsed = false;
     }
 
     this.#page = await this.#browser.newPage();
     this.#startedAt = Date.now();
-    this.#log(`browser.start session=${this.#browser.id} recording=true stealth=${this.#browser ? wantStealth : false}`);
+    this.#log(`browser.start session=${this.#browser.id} recording=true stealth=${stealthUsed}`);
 
     const heartbeatMs = opts.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
     if (heartbeatMs > 0) {

@@ -73,6 +73,21 @@ test("renderDashboard renders step rows from journal events", () => {
   assert.match(html, /<td>…<\/td><td>file<\/td><td>browser<\/td><td><\/td>/);
 });
 
+test("a rewound step renders its LAST state — recovered, not failed (review finding #5)", () => {
+  const rewound: JournalEvent[] = [
+    { t: 1, type: "step.start", id: "format", surface: "desktop" },
+    { t: 2, type: "step.fail", id: "format", error: "focus miss" },
+    { t: 3, type: "rewind", from: "format", snapshot: "snap-1" },
+    { t: 4, type: "step.start", id: "format", surface: "desktop" },
+    { t: 5, type: "step.ok", id: "format", ms: 12116 },
+  ];
+  const html = renderDashboard(report({ rewinds: 1 }), rewound);
+  // One row per step id, green with the retry's timing.
+  assert.equal(html.match(/<td>format<\/td>/g)?.length, 1);
+  assert.match(html, /<td>✅<\/td><td>format<\/td><td>desktop<\/td><td>12116ms<\/td>/);
+  assert.ok(!html.includes("<td>❌</td><td>format</td>"));
+});
+
 test("renderDashboard renders predicate rows and the cost line", () => {
   const html = renderDashboard(report(), []);
   assert.match(html, /fileExists:exceptions\.csv/);

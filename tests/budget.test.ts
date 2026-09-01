@@ -75,3 +75,31 @@ test("assertCanAfford counts already-spent dollars toward the projection", () =>
   budget.charge("browser", 3600); // spent $0.10 — already over
   assert.throws(() => budget.assertCanAfford("sandbox", 1), BudgetExceededError);
 });
+
+test("reservations: live surfaces count toward the projection (review finding #2)", () => {
+  const budget = new Budget(0.01, "starter");
+  // Reserve the browser's estimate at acquire time: $0.005 for 180s.
+  const reservation = budget.reserve("browser", 180);
+  assert.ok(Math.abs(reservation - 0.005) < 1e-9);
+  assert.equal(budget.reservedUsd, reservation);
+
+  // Sandbox alone would be fine ($0.00285); browser-reserved + sandbox passes.
+  budget.assertCanAfford("sandbox", 180);
+  // But browser + sandbox + desktop ($0.005 + $0.00285 + $0.00513) exceeds $0.01.
+  const sandboxReservation = budget.reserve("sandbox", 180);
+  assert.throws(() => budget.assertCanAfford("desktop", 240), BudgetExceededError);
+
+  // Release converts cleanly; actuals settle the ledger.
+  budget.releaseReserved(reservation);
+  budget.releaseReserved(sandboxReservation);
+  assert.equal(budget.reservedUsd, 0);
+  budget.assertCanAfford("desktop", 240);
+});
+
+test("releaseReserved clamps at zero (double release is harmless)", () => {
+  const budget = new Budget(1, "starter");
+  const r = budget.reserve("desktop", 240);
+  budget.releaseReserved(r);
+  budget.releaseReserved(r);
+  assert.equal(budget.reservedUsd, 0);
+});

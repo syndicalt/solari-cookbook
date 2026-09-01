@@ -126,6 +126,65 @@ test("clickAndConfirm clicks humanized, settles, and returns the screenshot", as
   assert.deepEqual(shot, PNG_B);
 });
 
+test("ocr verifier is authoritative when provided — sentinel string read back", async () => {
+  // Identical PNG bytes would fail the byte-diff, but OCR read the sentinel.
+  const fake = makeFocusFake([PNG_A, PNG_A]);
+  const shot = () => fake.desktop.screenshot();
+  const ok = await confirmFocus(fake.desktop, shot, {
+    sleep: noSleep,
+    ocr: async () => `cell c3: ${FOCUS_SENTINEL}`,
+  });
+  assert.equal(ok, true);
+});
+
+test("ocr match tolerates tesseract 0/O and 1/I confusion", async () => {
+  const fake = makeFocusFake([PNG_A, PNG_A]);
+  const shot = () => fake.desktop.screenshot();
+  const ok = await confirmFocus(fake.desktop, shot, {
+    sleep: noSleep,
+    ocr: async () => "N0API_F0CUS_0K", // zeros where the O's are
+  });
+  assert.equal(ok, true);
+});
+
+test("ocr match survives the mangling seen on a real desktop", async () => {
+  // Verbatim live tesseract output: "NOAPI_FOCUS_OK" → "NQAP| FOCUS_OK".
+  const fake = makeFocusFake([PNG_A, PNG_A]);
+  const shot = () => fake.desktop.screenshot();
+  const ok = await confirmFocus(fake.desktop, shot, {
+    sleep: noSleep,
+    ocr: async () => "3__INV-2026-06-005 Umbrella Freight NQAP| FOCUS_OK missing_in_ ledger @",
+  });
+  assert.equal(ok, true);
+});
+
+test("ocr verifier catches the modal false-pass the byte-diff cannot see", async () => {
+  // Bytes DIFFER (a modal's checkbox toggled) but the sentinel is not on
+  // screen — the case the byte-diff gets wrong (observed live on the
+  // Text Import dialog). OCR says miss.
+  const fake = makeFocusFake([PNG_A, PNG_B]);
+  const shot = () => fake.desktop.screenshot();
+  await assert.rejects(
+    typeWithSentinel(fake.desktop, shot, 320, 300, "real content", {
+      sleep: noSleep,
+      ocr: async () => "text import dialog, no sentinel here",
+    }),
+    FocusMissError,
+  );
+});
+
+test("ocr failure falls back to the byte-diff", async () => {
+  const fake = makeFocusFake([PNG_A, PNG_B]); // bytes differ → fallback passes
+  const shot = () => fake.desktop.screenshot();
+  const ok = await confirmFocus(fake.desktop, shot, {
+    sleep: noSleep,
+    ocr: async () => {
+      throw new Error("tesseract exploded");
+    },
+  });
+  assert.equal(ok, true, "byte-diff fallback when OCR tooling fails");
+});
+
 test("screenshot ring evicts oldest past capacity and keeps order", () => {
   const ring = new ScreenshotRing(3);
   ring.push("one", new Uint8Array([1]), 1);

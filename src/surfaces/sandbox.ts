@@ -191,14 +191,18 @@ export class SolariSandboxSurface implements SandboxSurface {
       readFile(join(opts.fixturesDir, "policy.yaml"), "utf8"),
       readFile(opts.zipPath),
     ]);
-    const mkdir = await this.sh(`mkdir -p ${workdir}`);
+    // argv form — never interpolate a caller-supplied path into a shell line
+    // (review finding: workdir comes from scenario-shaped input).
+    const mkdir = await sandbox.commands.run("mkdir", { args: ["-p", workdir] });
     if (mkdir.exitCode !== 0) throw new Error(`sandbox.reconcile mkdir failed exit=${mkdir.exitCode}`);
     await sandbox.files.write(`${workdir}/reconcile.py`, reconcilePy);
     await sandbox.files.write(`${workdir}/ledger.csv`, ledgerCsv);
     await sandbox.files.write(`${workdir}/policy.yaml`, policyYaml);
     await sandbox.files.write(`${workdir}/invoices.zip`, zipBytes);
 
-    const extract = await this.sh(`cd ${workdir} && python3 -m zipfile -e invoices.zip invoices/`);
+    const extract = await sandbox.commands.run("python3", {
+      args: ["-m", "zipfile", "-e", `${workdir}/invoices.zip`, `${workdir}/invoices/`],
+    });
     if (extract.exitCode !== 0) {
       throw new Error(`sandbox.reconcile extract failed exit=${extract.exitCode} stdout=${extract.stdout}`);
     }
@@ -231,7 +235,9 @@ export class SolariSandboxSurface implements SandboxSurface {
     // to plain ESM JS first; the on-VM layout preserves what zip.js's
     // DEFAULT_INVOICES_DIR (../../fixtures/invoices) resolves against.
     const buildDir = buildPortalJs();
-    const mkdir = await this.sh("mkdir -p /app/apps/portal /app/fixtures/invoices");
+    const mkdir = await sandbox.commands.run("mkdir", {
+      args: ["-p", "/app/apps/portal", "/app/fixtures/invoices"],
+    });
     if (mkdir.exitCode !== 0) throw new Error(`sandbox.portal mkdir failed exit=${mkdir.exitCode}`);
     for (const file of listFiles(buildDir)) {
       await sandbox.files.write(join("/app", relative(buildDir, file)), new Uint8Array(readFileSync(file)));

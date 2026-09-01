@@ -15,8 +15,12 @@
  *  - `close()` drops only the local channel; `destroy(sessionId)` ends the
  *    session. Do both, or the VM leaks.
  */
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile, unlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 import type { NoapiConfig } from "../types.ts";
+import { ocrAvailable, ocrPng } from "../eval/ocr.ts";
 import {
   CALIBRATED_CLICK,
   SCREEN_CENTER,
@@ -271,6 +275,32 @@ export class SolariDesktopSurface implements DesktopSurface {
   }
 
   /**
+   * Sentinel OCR: when a local tesseract exists, focus is verified by reading
+   * the sentinel STRING back off the screen (authoritative — catches the
+   * "typed into a modal" false-pass a byte-diff cannot). Memoized; null when
+   * tesseract is absent (byte-diff fallback). Deps can inject a fake.
+   */
+  #ocrFn: ((png: Uint8Array) => Promise<string>) | null | undefined;
+
+  async #ocr(): Promise<((png: Uint8Array) => Promise<string>) | null> {
+    if (this.#ocrFn !== undefined) return this.#ocrFn;
+    if (!(await ocrAvailable())) {
+      this.#ocrFn = null;
+      return null;
+    }
+    this.#ocrFn = async (png: Uint8Array) => {
+      const tmp = join(tmpdir(), `noapi-focus-${randomUUID()}.png`);
+      try {
+        await writeFile(tmp, png);
+        return await ocrPng(tmp);
+      } finally {
+        await unlink(tmp).catch(() => {});
+      }
+    };
+    return this.#ocrFn;
+  }
+
+  /**
    * Wait until the screen has changed at least once since open AND then gone
    * stable (two consecutive identical frames). LibreOffice cold start shows
    * a STATIC splash first — a naive "stable screen" check returns during
@@ -444,7 +474,11 @@ export class SolariDesktopSurface implements DesktopSurface {
       //    hotkey("ctrl","z") delivers a literal "z" on this template.
       const point = this.#clickPoint(forceMiss);
       const shot = () => this.screenshot("focus-probe");
-      await typeWithSentinel(desktop, shot, point.x, point.y, "EXCEPTIONS", { sleep: this.#sleep });
+      const ocr = await this.#ocr();
+      await typeWithSentinel(desktop, shot, point.x, point.y, "EXCEPTIONS", {
+        sleep: this.#sleep,
+        ...(ocr ? { ocr } : {}),
+      });
       await this.screenshot("desktop-01-open");
     }
 

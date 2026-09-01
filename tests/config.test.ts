@@ -31,16 +31,20 @@ test("loadDotEnv parses KEY=VALUE lines and skips comments/blanks/garbage", () =
       "",
       "NOAPI_TEST_DOTENV_A=one",
       "NOAPI_TEST_DOTENV_B= two words ",
+      'NOAPI_TEST_DOTENV_Q="quoted value"',
+      "NOAPI_TEST_DOTENV_S='single quoted'",
       "garbage line without equals",
       "=no-key",
       "   ",
     ].join("\n"),
   );
   try {
-    withSavedEnv(["NOAPI_TEST_DOTENV_A", "NOAPI_TEST_DOTENV_B"], () => {
+    withSavedEnv(["NOAPI_TEST_DOTENV_A", "NOAPI_TEST_DOTENV_B", "NOAPI_TEST_DOTENV_Q", "NOAPI_TEST_DOTENV_S"], () => {
       loadDotEnv(path);
       assert.equal(process.env.NOAPI_TEST_DOTENV_A, "one");
       assert.equal(process.env.NOAPI_TEST_DOTENV_B, "two words");
+      assert.equal(process.env.NOAPI_TEST_DOTENV_Q, "quoted value", "surrounding quotes are stripped");
+      assert.equal(process.env.NOAPI_TEST_DOTENV_S, "single quoted");
       assert.equal(process.env[""], undefined);
     });
   } finally {

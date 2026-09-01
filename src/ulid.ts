@@ -2,7 +2,9 @@
  * ULID — run identifiers.
  *
  * Hand-rolled (no dependency): 48-bit millisecond timestamp + 80 bits of
- * cryptographic randomness, Crockford base32, 26 chars, monotonic-friendly.
+ * cryptographic randomness, Crockford base32, 26 chars. Sorts by time across
+ * runs; NOT monotonic within the same millisecond (we don't need it — one
+ * run per process).
  */
 import { randomBytes } from "node:crypto";
 

@@ -154,4 +154,24 @@ test("portal contract", async (t) => {
     });
     assert.equal(res.status, 400);
   });
+
+  await t.test("oversized upload is rejected with 413 (body cap)", async () => {
+    const boundary = "noapitestboundary";
+    const big = Buffer.alloc(26 * 1024 * 1024, 0x41); // 26 MiB > 25 MiB cap
+    const multipart = Buffer.concat([
+      Buffer.from(
+        `--${boundary}\r\n` +
+          'content-disposition: form-data; name="file"; filename="huge.pdf"\r\n' +
+          "content-type: application/pdf\r\n\r\n",
+      ),
+      big,
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+    const res = await authedFetch(ROUTES.closeSubmit, {
+      method: "POST",
+      headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
+      body: multipart,
+    });
+    assert.equal(res.status, 413);
+  });
 });

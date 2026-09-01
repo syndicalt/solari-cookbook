@@ -68,6 +68,7 @@ export class Budget {
   readonly limitUsd: number;
   readonly plan: keyof typeof RATES;
   #spentUsd = 0;
+  #reservedUsd = 0;
   #seconds: Record<SurfaceName, number> = { browser: 0, sandbox: 0, desktop: 0 };
 
   constructor(limitUsd: number, plan: keyof typeof RATES = "free") {
@@ -84,12 +85,36 @@ export class Budget {
   }
 
   /**
+   * Reserve the estimated cost of a surface AT ACQUIRE TIME. Without this,
+   * every {@link assertCanAfford} projects `spent + next` while previously
+   * acquired surfaces are still live and uncharged — three concurrent
+   * surfaces each pass a check designed for their sum (found in review).
+   * Released when the surface is disposed and charged for actuals.
+   */
+  reserve(surface: SurfaceName, estimatedSeconds: number): number {
+    const usd = surfaceCost(surface, estimatedSeconds, this.plan);
+    this.#reservedUsd += usd;
+    return usd;
+  }
+
+  /** Release a reservation made by {@link reserve} (pass the value it returned). */
+  releaseReserved(usd: number): void {
+    this.#reservedUsd = Math.max(0, this.#reservedUsd - usd);
+  }
+
+  /** Dollars currently reserved by live surfaces. */
+  get reservedUsd(): number {
+    return this.#reservedUsd;
+  }
+
+  /**
    * Throw {@link BudgetExceededError} if starting `surface` for an estimated
-   * `seconds` would push the projected total past the limit. Never restore a
-   * snapshot on this error — the run stops spending.
+   * `seconds` would push the projected total — spent PLUS reserved live
+   * surfaces PLUS the next one — past the limit. Never restore a snapshot
+   * on this error: the run stops spending.
    */
   assertCanAfford(surface: SurfaceName, estimatedSeconds: number): void {
-    const projected = this.#spentUsd + surfaceCost(surface, estimatedSeconds, this.plan);
+    const projected = this.#spentUsd + this.#reservedUsd + surfaceCost(surface, estimatedSeconds, this.plan);
     if (projected > this.limitUsd) {
       throw new BudgetExceededError(
         `budget_exceeded: projected $${projected.toFixed(4)} > limit $${this.limitUsd.toFixed(2)} (next surface: ${surface})`,

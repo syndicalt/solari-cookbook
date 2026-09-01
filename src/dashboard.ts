@@ -15,16 +15,26 @@ export function renderDashboard(report: EvalReport, events: JournalEvent[]): str
   const rows = report.predicates
     .map((p) => `<tr><td>${p.ok ? "✅" : "❌"}</td><td>${esc(p.name)}</td><td>${esc(p.detail ?? "")}</td></tr>`)
     .join("\n");
-  const steps = events
-    .filter((e) => e.type === "step.start")
-    .map((e) => {
-      const id = (e as { id: string }).id;
-      const ok = events.find((x) => x.type === "step.ok" && (x as { id: string }).id === id);
-      const fail = events.find((x) => x.type === "step.fail" && (x as { id: string }).id === id);
-      const state = fail ? "❌" : ok ? "✅" : "…";
-      const ms = ok ? `${(ok as { ms: number }).ms}ms` : "";
-      return `<tr><td>${state}</td><td>${esc(id)}</td><td>${esc((e as { surface: string }).surface)}</td><td>${ms}</td></tr>`;
-    })
+  // Group by step id, LAST state wins: a rewound step journals
+  // start → fail → rewind → start → ok, and painting the historical fail
+  // red after a green retry makes a recovered run look broken (found in
+  // review).
+  const byStep = new Map<string, { surface: string; state: "✅" | "❌" | "…"; ms: number | null }>();
+  for (const e of events) {
+    if (e.type === "step.start") {
+      const ev = e as { id: string; surface: string };
+      if (!byStep.has(ev.id)) byStep.set(ev.id, { surface: ev.surface, state: "…", ms: null });
+    } else if (e.type === "step.ok" || e.type === "step.fail") {
+      const ev = e as { id: string; ms?: number };
+      const row = byStep.get(ev.id);
+      if (row) {
+        row.state = e.type === "step.ok" ? "✅" : "❌";
+        if (e.type === "step.ok") row.ms = ev.ms ?? null;
+      }
+    }
+  }
+  const steps = [...byStep.entries()]
+    .map(([id, r]) => `<tr><td>${r.state}</td><td>${esc(id)}</td><td>${esc(r.surface)}</td><td>${r.ms === null ? "" : `${r.ms}ms`}</td></tr>`)
     .join("\n");
   const link = (url: string | null, label: string) =>
     url ? `<a href="${esc(url)}">${label}</a>` : `<span class="dim">${label}: n/a</span>`;

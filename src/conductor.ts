@@ -79,7 +79,12 @@ export async function runScenario(
   const wallStart = now();
 
   // Live surfaces, disposed in reverse acquisition order — always.
-  const live: Array<{ name: SurfaceName; surface: BrowserSurface | SandboxSurface | DesktopSurface }> = [];
+  const live: Array<{
+    name: SurfaceName;
+    surface: BrowserSurface | SandboxSurface | DesktopSurface;
+    /** Dollars reserved at acquire; released on dispose (see Budget.reserve). */
+    reservation: number;
+  }> = [];
   let browser: BrowserSurface | null = null;
   let sandbox: SandboxSurface | null = null;
   let desktop: DesktopSurface | null = null;
@@ -96,8 +101,9 @@ export async function runScenario(
 
   const acquire = <S extends BrowserSurface | SandboxSurface | DesktopSurface>(name: SurfaceName, make: () => S): S => {
     budget.assertCanAfford(name, SURFACE_ESTIMATES[name]);
+    const reservation = budget.reserve(name, SURFACE_ESTIMATES[name]);
     const s = make();
-    live.push({ name, surface: s });
+    live.push({ name, surface: s, reservation });
     return s;
   };
   const getBrowser = () => (browser ??= acquire("browser", factory.browser));
@@ -110,7 +116,10 @@ export async function runScenario(
     await flushRing(desktop);
     await desktop.dispose();
     const i = live.findIndex((l) => l.surface === desktop);
-    if (i >= 0) live.splice(i, 1);
+    if (i >= 0) {
+      budget.releaseReserved(live[i]!.reservation);
+      live.splice(i, 1);
+    }
     budget.charge("desktop", desktop.secondsUsed());
     desktop = null;
   };
@@ -122,9 +131,17 @@ export async function runScenario(
   };
 
   // Dispose everything on SIGINT/SIGTERM too — credits are the budget.
+  // Errors are LOGGED (a swallowed dispose failure is a billing leak), and a
+  // watchdog caps the whole teardown so a hung dispose cannot pin the process.
   const onSignal = () => {
     void (async () => {
-      for (const { surface } of [...live].reverse()) await surface.dispose().catch(() => {});
+      const teardown = (async () => {
+        for (const { name, surface } of [...live].reverse()) {
+          await surface.dispose().catch((e) => log(`dispose.warn ${name} ${(e as Error).message}`));
+        }
+      })();
+      const timeout = new Promise<void>((r) => setTimeout(r, 10_000));
+      await Promise.race([teardown, timeout]);
       process.exit(130);
     })();
   };
@@ -254,7 +271,7 @@ export async function runScenario(
 
   // Dispose in reverse order, always — but stop the desktop recording first:
   // the guest uploads the mp4 on record.stop(), so disposing first loses it.
-  for (const { name, surface } of [...live].reverse()) {
+  for (const { name, surface, reservation } of [...live].reverse()) {
     if (name === "desktop") {
       const d = surface as DesktopSurface;
       await flushRing(d);
@@ -265,6 +282,7 @@ export async function runScenario(
       }
     }
     await surface.dispose().catch((e) => log(`dispose.warn ${name} ${(e as Error).message}`));
+    budget.releaseReserved(reservation);
     budget.charge(name, surface.secondsUsed());
     emit({ t: now(), type: "cost", usd: budget.spentUsd });
   }

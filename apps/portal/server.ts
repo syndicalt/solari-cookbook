@@ -130,10 +130,32 @@ ${status ? `<p data-testid="upload-status">${escapeHtml(status)}</p>` : ""}
   );
 }
 
+/** Request bodies are a login form or one PDF — cap at 25 MiB (review: unbounded readBody is an allocation DoS). */
+const MAX_BODY_BYTES = 25 * 1024 * 1024;
+
+class BodyTooLargeError extends Error {
+  constructor() {
+    super("request body exceeds 25 MiB cap");
+    this.name = "BodyTooLargeError";
+  }
+}
+
 function readBody(req: IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    let size = 0;
+    let overflow = false;
+    req.on("data", (chunk: Buffer) => {
+      if (overflow) return; // draining
+      size += chunk.length;
+      if (size > MAX_BODY_BYTES) {
+        overflow = true;
+        reject(new BodyTooLargeError());
+        // Do NOT destroy the socket — the handler still owes a 413 response.
+        return;
+      }
+      chunks.push(chunk);
+    });
     req.on("end", () => resolve(Buffer.concat(chunks)));
     req.on("error", reject);
   });
@@ -312,6 +334,10 @@ export async function createPortal(options: PortalOptions = {}): Promise<PortalH
 
       sendHtml(res, 404, page("not found", "<h1>404</h1>"));
     })().catch((err: unknown) => {
+      if (err instanceof BodyTooLargeError) {
+        sendJson(res, 413, { ok: false, error: "body too large" });
+        return;
+      }
       console.error("portal.error", err);
       if (!res.headersSent) {
         sendJson(res, 500, { ok: false, error: "internal" });

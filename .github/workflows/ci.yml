@@ -1,0 +1,23 @@
+# CI — the offline-verifiable half of the cookbook-rules contract.
+# Live Solari runs (make demo) need a key and are not run here; everything
+# else is. Reviewers: this is what "cookbook rules are CI" means.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: npm ci
+      - run: make typecheck
+      - run: make lint
+      - run: make test
+      - run: make demo-offline

@@ -14,9 +14,13 @@
  * So: NEVER click (640, 360). {@link CALIBRATED_CLICK} is the cookbook point
  * (320, 300) — inside the top-left quadrant where apps open on 1280x720.
  *
- * v0 is allowed to be dumb (AGENTS.md): the probe types {@link FOCUS_SENTINEL}
+ * v0 was allowed to be dumb (AGENTS.md): the probe types {@link FOCUS_SENTINEL}
  * and compares PNG bytes before/after. Identical bytes means nothing
- * rendered, i.e. the keystrokes went nowhere.
+ * rendered, i.e. the keystrokes went nowhere. When `FocusOpts.ocr` is
+ * provided (tesseract-backed in production, see src/eval/ocr.ts), OCR is
+ * authoritative instead: the sentinel STRING must be read back from the
+ * screen, which also catches the "typed into a modal dialog" false-pass
+ * the byte-diff cannot see.
  *
  * Sentinel cleanup is COMMIT-AND-OVERWRITE with clicks only. Verified live
  * against a Solari desktop: `keyboard.type` does NOT translate "\n" into an
@@ -75,6 +79,15 @@ export interface FocusOpts {
   sleep?: (ms: number) => Promise<void>;
   /** Settle time after click/type before the screenshot. Default 300ms. */
   waitMs?: number;
+  /**
+   * OCR verifier: PNG bytes → recognized text. When provided, focus is
+   * confirmed by finding FOCUS_SENTINEL IN THE TEXT — authoritative, unlike
+   * the byte-diff, which cannot tell "typed into a modal's checkbox" from
+   * real focus (observed live: clicks toggled Text Import controls and the
+   * byte-diff passed). Byte-diff remains the fallback when OCR is missing
+   * or errors.
+   */
+  ocr?: (png: Uint8Array) => Promise<string>;
 }
 
 const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -111,6 +124,21 @@ export async function confirmFocus(
   await sleep(waitMs);
   const after = await shot();
 
+  if (opts.ocr) {
+    try {
+      // OCR is authoritative when available, but tesseract mangles the full
+      // sentinel at 10pt (live: "NOAPI_FOCUS_OK" → "NQAP| FOCUS_OK"). So we
+      // match the robust core token FOCUSOK after normalizing case, stripping
+      // non-letters, and mapping the classic 0/O, 1/I confusions. A misread
+      // must not cost a rewind cycle; a modal checkbox toggle must not pass.
+      const normalize = (s: string) =>
+        s.toUpperCase().replace(/0/g, "O").replace(/1/g, "I").replace(/[^A-Z]/g, "");
+      const text = await opts.ocr(after);
+      return normalize(text).includes("FOCUSOK");
+    } catch {
+      // OCR tooling failed — fall back to the byte-diff below.
+    }
+  }
   return !bytesEqual(before, after);
 }
 
