@@ -52,7 +52,7 @@ Most computer-use demos restart the world on failure. NOAPI restarts the step:
 | Surface | Time-travel primitive | How NOAPI uses it |
 |---|---|---|
 | Browser | rrweb NDJSON replay (opt-in per session) | Recording is on for every scored run; replay is polled (~30s) and stored even on failure |
-| Sandbox | VM snapshot / revert | After `reconcile` succeeds, the VM is snapshotted (`close-numbers-ok`). If the desktop step fails, the parse is not rerun — the conductor reverts and resumes at `format` |
+| Sandbox | VM snapshot (+ opt-in revert) | After `reconcile` succeeds, the VM is snapshotted (`close-numbers-ok`). If the desktop step fails, the parse is not rerun — the conductor resumes at `format` against the last-good state |
 | Desktop | Screenshot ring buffer | Last 10 frames kept; on a focus miss the failed GUI session is discarded, the frames are saved, and the click is replanned |
 
 The policy is data (`src/rewind/policy.ts`): rewind on `desktop.focus_miss` / `desktop.app_not_ready` up to 2 attempts; never rewind on `budget_exceeded` or `portal_rejected_auth`; always keep failed artifacts. Snapshot **revert** on rewind is opt-in (`NOAPI_REWIND_REVERT=1`) — on the current pool a revert attempt itself disrupts the VM (measured live: heartbeats fail, preview portal 404s), and it is protective-only since nothing writes to the sandbox after the snapshot.

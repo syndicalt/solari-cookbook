@@ -307,6 +307,9 @@ export class SolariDesktopSurface implements DesktopSurface {
    * the splash, before the Text Import modal exists (verified live: clicks
    * landed in a dialog that appeared later and toggled its checkboxes).
    * Cap: 15 polls × 2s. Poll frames are NOT pushed to the rewind ring.
+   * Throws if the screen never changes — falling through would fire the
+   * calibrated clicks into whatever happens to be on screen (found in
+   * review). The caller catches this and takes the headless fallback.
    */
   async #waitForSettle(): Promise<void> {
     const desktop = this.#requireDesktop();
@@ -323,6 +326,9 @@ export class SolariDesktopSurface implements DesktopSurface {
       }
       prev = shot;
     }
+    if (!changed) {
+      throw new Error("desktop.settle_timeout — screen never changed after open (splash/frozen VM?)");
+    }
   }
 
   /**
@@ -331,9 +337,11 @@ export class SolariDesktopSurface implements DesktopSurface {
    * not a binary — the desktop agent executes argv directly, exactly like
    * sandbox commands.run. Probe through `sh -c` or every probe fails and
    * LibreOffice looks "missing" when it is installed (verified live).
+   * `name` rides as a positional parameter, never interpolated into the
+   * shell string.
    */
   async #probeBinary(desktop: DesktopLike, name: string): Promise<boolean> {
-    const r = await desktop.exec("sh", { args: ["-c", `command -v ${name}`] });
+    const r = await desktop.exec("sh", { args: ["-c", 'command -v "$1"', "probe", name] });
     return r.exitCode === 0;
   }
 

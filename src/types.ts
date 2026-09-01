@@ -9,9 +9,6 @@
 /** The three Solari surfaces NOAPI conducts. */
 export type SurfaceName = "browser" | "sandbox" | "desktop";
 
-/** Lifecycle status of a run, mirrored into `eval.json`. */
-export type RunStatus = "queued" | "running" | "succeeded" | "failed" | "rewound";
-
 /**
  * Every action the conductor knows how to execute. Actions are functions in
  * `src/surfaces/*`, dispatched by id — never a pile of conditionals in cli.ts.

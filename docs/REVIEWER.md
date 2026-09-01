@@ -45,12 +45,12 @@ sha256sum -c artifacts/<runId>/MANIFEST.sha256
 Then prove reliability is a subsystem, not a vibe:
 
 ```bash
-make demo-flaky    # forces a desktop focus-miss (click at screen center)
+make demo-flaky    # forces a desktop focus-miss (cancels LibreOffice's CSV import modal)
 grep rewind artifacts/<runId>/eval.json    # "rewinds": 1 — and still green
 grep '"rewind"' artifacts/<runId>/journal.ndjson
 ```
 
-The flaky run clicks (640,360) — the window *behind* LibreOffice — on purpose. The focus sentinel catches the miss, the conductor restores the `close-numbers-ok` sandbox snapshot, discards the poisoned GUI session, retries the step, and passes. That is the whole thesis: **rewind the step, not the universe.**
+The flaky run cancels the CSV **Text Import modal**, so no document loads and typing into the Start Center renders nothing. The OCR focus sentinel catches the miss, the conductor discards the poisoned GUI session, retries `format` against the last-good sandbox state, and passes. Snapshot **revert** is opt-in (`NOAPI_REWIND_REVERT=1`) and off by default — on the current Solari pool a revert attempt itself disrupts the VM (measured live: heartbeats fail, preview portal 404s), and nothing writes to the sandbox after the snapshot, so resuming from last-good state is equivalent. That is the whole thesis: **rewind the step, not the universe.**
 
 ## Where to look, in order
 

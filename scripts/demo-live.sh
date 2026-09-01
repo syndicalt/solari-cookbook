@@ -5,7 +5,7 @@
 # via previewUrl (NOAPI_PORTAL=sandbox): a cloud browser cannot reach this
 # machine's localhost, and accounts limited to one concurrent VM cannot run
 # a second sandbox just for the portal. Requires SOLARI_API_KEY (env or .env).
-# Costs ~$0.15-0.25.
+# Measured on Starter: ~$0.002 per green run, ~33-45s wall.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

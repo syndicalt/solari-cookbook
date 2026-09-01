@@ -21,7 +21,10 @@ import type { SolariClient } from "@solarisdk/sdk";
 import type { NoapiConfig } from "../types.ts";
 import { listFiles } from "../manifest.ts";
 import { portalUrl } from "../portal-url.ts";
-import { buildPortalJs } from "../../scripts/build-portal-js.ts";
+// buildPortalJs is dynamically imported inside servePortal(): it pulls in the
+// `typescript` devDependency, and a top-level import here would make every
+// sandbox-surface load (including `node --omit=dev` runs and bare test loads)
+// fail with ERR_MODULE_NOT_FOUND.
 
 /* ------------------------------------------------------------------------ */
 /* Structural SDK types — the smallest slice of @solarisdk/sdk we use.      */
@@ -234,6 +237,7 @@ export class SolariSandboxSurface implements SandboxSurface {
     // The base template ships node 18 (probed), so the portal is transpiled
     // to plain ESM JS first; the on-VM layout preserves what zip.js's
     // DEFAULT_INVOICES_DIR (../../fixtures/invoices) resolves against.
+    const { buildPortalJs } = await import("../../scripts/build-portal-js.ts");
     const buildDir = buildPortalJs();
     const mkdir = await sandbox.commands.run("mkdir", {
       args: ["-p", "/app/apps/portal", "/app/fixtures/invoices"],
@@ -356,21 +360,5 @@ export class SolariSandboxSurface implements SandboxSurface {
 
   #log(line: string): void {
     (this.#deps.logger ?? console.log)(line);
-  }
-}
-
-/** Run `fn` against a started sandbox surface, disposing in `finally`. */
-export async function withSandbox<T>(
-  config: NoapiConfig,
-  opts: SandboxStartOptions,
-  fn: (surface: SandboxSurface) => Promise<T>,
-  deps: SandboxDeps = {},
-): Promise<T> {
-  const surface = new SolariSandboxSurface(config, deps);
-  await surface.start(opts);
-  try {
-    return await fn(surface);
-  } finally {
-    await surface.dispose();
   }
 }

@@ -37,8 +37,8 @@ export function resolveConfig(env: NodeJS.ProcessEnv = process.env): NoapiConfig
     portalOrigin: env.NOAPI_PORTAL_ORIGIN ?? "http://127.0.0.1:8787",
     portalUser: env.NOAPI_PORTAL_USER ?? "reviewer@getsolari.com",
     portalPassword: env.NOAPI_PORTAL_PASSWORD ?? "reviewer",
-    // Free-plan degrade is the safe default until a paid feature succeeds;
-    // surfaces flip this to "starter" on the first stealth-capable launch.
+    // Plan comes only from NOAPI_PLAN; config is immutable once resolved.
+    // "free" is the safe default: no stealth, no desktops (Starter+ only).
     plan: env.NOAPI_PLAN === "starter" ? "starter" : "free",
     portalMode: env.NOAPI_PORTAL === "sandbox" ? "sandbox" : "local",
   };

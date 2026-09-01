@@ -170,9 +170,10 @@ async function captureLogs<T>(fn: () => Promise<T>): Promise<{ result: T; lines:
 /** soffice present, headless convert succeeds, pdf readable. */
 function libreOfficeExec(desktop: FakeDesktop): void {
   desktop.execImpl = (cmd, args) => {
-    // Probes go through the shell: exec("sh", ["-c", "command -v <name>"]).
-    if (cmd === "sh" && args[0] === "-c" && (args[1] ?? "").startsWith("command -v")) {
-      return { exitCode: args[1] === "command -v soffice" ? 0 : 1, stdout: "", stderr: "" };
+    // Probes go through the shell with the name as a positional parameter:
+    // exec("sh", ["-c", 'command -v "$1"', "probe", <name>]).
+    if (cmd === "sh" && args[0] === "-c" && args[1] === 'command -v "$1"') {
+      return { exitCode: args[3] === "soffice" ? 0 : 1, stdout: "", stderr: "" };
     }
     if (cmd === "soffice" && args.includes("--convert-to")) {
       desktop.files.set("/work/exceptions.pdf", new Uint8Array([0x25, 0x50, 0x44, 0x46]));
@@ -211,15 +212,15 @@ test("openApp probes the binary, falls back to the alias, then errors listing pr
 
   // soffice missing, libreoffice present → alias wins
   desktop.execImpl = (_cmd, args) => ({
-    exitCode: args[1] === "command -v libreoffice" ? 0 : 1,
+    exitCode: args[3] === "libreoffice" ? 0 : 1,
     stdout: "",
     stderr: "",
   });
   const pid = await captureLogs(() => surface.openApp("libreoffice")).then((r) => r.result);
   assert.equal(pid, 4321);
   assert.deepEqual(
-    desktop.execCalls.map((c) => c.args[1]),
-    ["command -v soffice", "command -v libreoffice"],
+    desktop.execCalls.map((c) => c.args[3]),
+    ["soffice", "libreoffice"],
   );
   assert.equal(desktop.openCalls[0]!.name, "libreoffice");
 
@@ -371,6 +372,35 @@ test("formatLibreOffice GUI-open failure: logs desktop.gui_fallback, still conve
   }
 });
 
+test("formatLibreOffice settle-timeout (frozen screen after open) falls back instead of clicking blind", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "noapi-desktop-"));
+  try {
+    const csvPath = join(dir, "exceptions.csv");
+    await writeFile(csvPath, "invoice,vendor\nINV-1,Acme\n");
+
+    const { desktop, surface } = makeSurface();
+    libreOfficeExec(desktop);
+    // Screen NEVER changes after open — waitForSettle must throw rather than
+    // fire the calibrated clicks into an unknown screen (found in review).
+    desktop.screenshotImpl = () => new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    await captureLogs(() => surface.start());
+
+    const { result, lines } = await captureLogs(() =>
+      surface.formatLibreOffice({ exceptionsCsvPath: csvPath }),
+    );
+
+    assert.ok(
+      lines.some((l) => l.includes("desktop.gui_fallback") && l.includes("desktop.settle_timeout")),
+    );
+    assert.equal(desktop.clicks.length, 0);
+    assert.equal(desktop.types.length, 0);
+    assert.ok(desktop.execCalls.some((c) => c.args.includes("--convert-to")));
+    assert.deepEqual(result.pdfBytes, new Uint8Array([0x25, 0x50, 0x44, 0x46]));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("NOAPI_FORCE_FOCUS_MISS=1 sends the first click to screen center and the sentinel fires", async () => {
   const dir = await mkdtemp(join(tmpdir(), "noapi-desktop-"));
   const prev = process.env.NOAPI_FORCE_FOCUS_MISS;
@@ -381,8 +411,11 @@ test("NOAPI_FORCE_FOCUS_MISS=1 sends the first click to screen center and the se
 
     const { desktop, surface } = makeSurface();
     libreOfficeExec(desktop);
-    // frozen screen: typing renders nothing → sentinel must fire
-    desktop.screenshotImpl = () => new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    // Screen changes once (settle passes: open → splash → modal), then freezes:
+    // typing renders nothing → sentinel must fire.
+    let settleShots = 0;
+    desktop.screenshotImpl = () =>
+      new Uint8Array([0x89, 0x50, 0x4e, settleShots++ === 0 ? 0x00 : 0x47]);
     await captureLogs(() => surface.start());
 
     const { lines } = await captureLogs(async () => {

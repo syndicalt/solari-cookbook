@@ -365,22 +365,6 @@ function adaptSolari(solari: Solari): SolariLike {
   };
 }
 
-/** Run `fn` against a started browser surface, disposing in `finally`. */
-export async function withBrowser<T>(
-  config: NoapiConfig,
-  opts: BrowserStartOptions,
-  fn: (surface: BrowserSurface) => Promise<T>,
-  deps: BrowserDeps = {},
-): Promise<T> {
-  const surface = new SolariBrowserSurface(config, deps);
-  await surface.start(opts);
-  try {
-    return await fn(surface);
-  } finally {
-    await surface.dispose();
-  }
-}
-
 function isNotFound(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   const status = (err as { status?: unknown }).status;
