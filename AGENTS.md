@@ -37,7 +37,7 @@ Five reviewer questions that must all be yes:
 | Need | Open this |
 |---|---|
 | Product / phases / extras | `NOAPI-implementation-plan.md` |
-| Exact SDK calls, gotchas | `vendor/solari-cookbook/examples/**` or `/tmp/solari-cookbook/examples/**` |
+| Exact SDK calls, gotchas | `examples/**` at this repo's root (this repo is the cookbook fork; NOAPI lives alongside it) |
 | Official docs | https://docs.getsolari.com |
 | Prices for `budget.ts` | https://docs.getsolari.com/pricing |
 | This contract | `AGENTS.md` |
@@ -102,36 +102,31 @@ Cookbook map you must implement against:
 ## Target tree
 
 ```text
-noapi/
+noapi/                            (this repo is a fork of solari-cookbook)
   AGENTS.md
   NOAPI-implementation-plan.md
   README.md
-  docs/REVIEWER.md
+  docs/{REVIEWER.md,COOKBOOK.md}
   Makefile
-  package.json
-  pyproject.toml
+  package.json  package-lock.json  tsconfig.json
   .env.example
   scenarios/vendor-close.json
-  fixtures/{ledger.csv,policy.yaml,reconcile.py,invoices/}
-  apps/portal/                 # fake vendor site
-  apps/dashboard/              # static run viewer
+  fixtures/{ledger.csv,policy.yaml,reconcile.py,invoices/,invoices.sha256}
+  apps/portal/{server.ts,selectors.ts,zip.ts}   # fake vendor site
+  examples/                       # upstream cookbook (read-only reference)
   src/
-    cli.ts
-    conductor.ts
-    journal.ts
-    budget.ts
-    types.ts
+    cli.ts  conductor.ts  journal.ts  budget.ts  types.ts
+    config.ts  doctor.ts  dashboard.ts  manifest.ts  ulid.ts  portal-url.ts
     surfaces/{browser.ts,sandbox.ts,desktop.ts}
-    rewind/{snapshots.ts,replays.ts}
-    eval/{predicates.ts,score.ts}
-    planner/static.ts          # v0
-    planner/llm.ts             # exists, off
-  python/{desktop_sidecar.py,libreoffice_ops.py,ocr_probe.py}
-  vendor/solari-cookbook/      # submodule or vendored examples
+    rewind/{policy.ts,focus.ts,screenshots.ts}
+    eval/{predicates.ts,score.ts,ocr.ts}
+    planner/static.ts          # v0, steers the scored demo
+    planner/llm.ts             # exists, off, throws
+  scripts/                       # deploy/debug helpers (build-portal-js, probe-sandbox, ...)
+  tests/                         # node:test, ~22 files + helpers/fake-surfaces.ts
 ```
 
-Node 22+ owns conductor, browser, sandbox, CLI, portal.  
-Python 3.11+ owns the desktop sidecar (`solari_desktop`) unless you first prove `@solarisdk/desktop` covers `open` / click / type / screenshot / `streamUrl` / `destroy`. If it does, delete the sidecar and stay on TS. Probe; do not guess.
+Node 22+ owns everything. **No Python sidecar**: `@solarisdk/desktop` was probed and covers `open` / click / type / screenshot / `streamUrl` / `destroy` — the sidecar plan was deleted, not deferred. Python appears only as `fixtures/reconcile.py`, which runs *inside* the sandbox.
 
 ---
 
@@ -139,13 +134,15 @@ Python 3.11+ owns the desktop sidecar (`solari_desktop`) unless you first prove 
 
 Do not start phase N+1 until the exit check for N is green. If you are unsure where the repo is, inspect the tree and resume the first incomplete phase.
 
+**Status: phases 0–4 are green and live-verified (2026-09-01, Starter plan).** Measured: `make demo` green in ~33s at $0.0015 (eval ok, 5/5 predicates); `make demo-flaky` green with `rewinds=1` at $0.0022; `make demo-offline` green; `make doctor` exit 0 live. 142 tests, ~92% line coverage, `tsc --noEmit` and `make lint` clean, CI at `.github/workflows/ci.yml`. Desktop MP4s from live runs are in `recordings/` (gitignored).
+
 | Phase | Build | Exit check |
 |---|---|---|
-| **0 Physics** | repo, Makefile, `.env.example`, disposer helpers, cookbook pointer, `src` stubs | `make doctor` with a key launches the cheapest browser, prints session id, exits 0 (no hang). Without a key, doctor exits 2 with a clear message |
-| **1 Twin world** | portal login / invoices zip / PDF upload; seeded ledger that disagrees on **two** invoices; sha256 goldens | `make demo-offline` closes the books with curl only. No Solari |
-| **2 Three surfaces** | scripted happy path: browser pull → sandbox reconcile + snapshot → desktop LibreOffice + proof shot → browser upload → dispose all | `make demo` writes artifacts and prints `streamUrl`. Eval may still be manual |
-| **3 Conductor** | scenario JSON, journal, predicates, budget, rewind on focus-miss | `make demo` writes green `eval.json`. `make demo-flaky` shows `rewinds >= 1` and still passes |
-| **4 Reviewer pack** | README, GIF slot, `docs/REVIEWER.md`, cost line, cookbook mapping, mermaid | A stranger can judge the repo in three minutes |
+| **0 Physics** ✅ | repo, Makefile, `.env.example`, disposer helpers, cookbook pointer, `src` stubs | `make doctor` with a key launches the cheapest browser, prints session id, exits 0 (no hang). Without a key, doctor exits 2 with a clear message |
+| **1 Twin world** ✅ | portal login / invoices zip / PDF upload; seeded ledger that disagrees on **two** invoices; sha256 goldens | `make demo-offline` closes the books with curl only. No Solari |
+| **2 Three surfaces** ✅ | scripted happy path: browser pull → sandbox reconcile + snapshot → desktop LibreOffice + proof shot → browser upload → dispose all | `make demo` writes artifacts and prints `streamUrl`. Eval may still be manual |
+| **3 Conductor** ✅ | scenario JSON, journal, predicates, budget, rewind on focus-miss | `make demo` writes green `eval.json`. `make demo-flaky` shows `rewinds >= 1` and still passes |
+| **4 Reviewer pack** ✅ | README, GIF slot, `docs/REVIEWER.md`, cost line, cookbook mapping, mermaid | A stranger can judge the repo in three minutes |
 | **5 One extra** | pick exactly one from the plan §6.4–6.7 | Only after Phase 4 |
 
 Stop at 4 unless the user asks for 5.
@@ -162,8 +159,12 @@ Stop at 4 unless the user asks for 5.
 - Reconciliation **runs inside the sandbox**. `files.write` `fixtures/reconcile.py`; do not parse invoices on the laptop.
 - Portal selectors live in one module shared by portal and browser surface so they cannot drift.
 - Desktop LibreOffice: probe binary with `command -v` / cookbook `exec(["-v", name])`. If GUI `open()` fails, fallback `soffice --headless --convert-to pdf` **and still** open the PDF on the desktop for the proof screenshot. Headless-only is a cookbook remix and loses the VNC bookmark.
-- Free-plan degrade: no stealth/proxy/captcha; one sandbox so dashboard preview may be local HTML. Detect plan on first error and continue.
-- Focus sentinel (v0 is allowed to be dumb): type `NOAPI_FOCUS_OK`, screenshot, confirm, undo. Use vision on that PNG before you reach for a bigger model.
+- **Portal reachability (live runs):** a cloud browser cannot reach loopback. The conductor deploys the portal *into the run's own sandbox* (`servePortal` in `src/surfaces/sandbox.ts`, transpiled to node-18 JS by `scripts/build-portal-js.ts` — the base sandbox template ships node 18, no TS) and drives it via `previewUrl`. The `?pt_token=...` from `previewUrl` must ride **every** request (gateway 401s otherwise); portal pages propagate it through all links/forms/redirects (`tokenSuffix` in `apps/portal/server.ts`). Join paths with `portalUrl()` in `src/portal-url.ts`, never string concat past the query.
+- Free-plan degrade: no stealth/proxy/captcha, and **desktops are Starter+ only** ("Desktop requires a paid plan" on Free). Detect plan on first error and continue. `NOAPI_PLAN=starter` flips rates and stealth on.
+- Focus sentinel is **OCR-verified**, not byte-compare: commit-by-click, screenshot, tesseract must read normalized `FOCUSOK` (it garbles the full `NOAPI_FOCUS_OK`), then overwrite. Keyboard chords and `\n` are broken on the real desktop template — commit input with a click. `make demo-flaky` forces a miss via a process-wide latch (`consumeForceMiss`) that cancels the Text Import modal.
+- Sentinel and `screenshotContainsText` need local **tesseract** (`src/eval/ocr.ts`). The predicate is intentionally case-sensitive. Missing tesseract = predicate fail, not skip — install it or expect red.
+- Sandbox `snapshot()` is real; **`revert()` is refused and destructive on this pool** — gated behind `NOAPI_REWIND_REVERT=1`, default off (journal logs `rewind.norevert`). Rewind re-drives the step from cached state instead.
+- Heartbeat browser **and** sandbox every 60s during long steps; `timeoutMs` is a rolling idle window and idle kills are silent.
 - Tests: Node test runner for portal contract + predicate unit tests. No Jest cathedral.
 
 ---
@@ -230,14 +231,15 @@ Public README voice: operator, not influencer. Lead with the command and the cos
 ```bash
 # .env.example
 SOLARI_API_KEY=          # slr_live_... from console.getsolari.com
-NOAPI_PORTAL_ORIGIN=http://127.0.0.1:8787
+NOAPI_PORTAL_ORIGIN=http://127.0.0.1:8787   # offline/doctor only — live runs deploy the portal into the run's sandbox and use its previewUrl
 NOAPI_PORTAL_USER=reviewer@getsolari.com
 NOAPI_PORTAL_PASSWORD=reviewer
-# optional, planner off unless set
-# OPENAI_API_KEY=
+NOAPI_PLAN=starter       # live runs: Starter rates + stealth + desktops (desktops 402 on Free)
+# NOAPI_REWIND_REVERT=1  # opt-in only: sandbox revert() is refused/destructive on this pool
+# OPENAI_API_KEY=        # optional, planner off unless set
 ```
 
-One key across browsers, sandboxes, desktops. That is the product.
+One key across browsers, sandboxes, desktops. That is the product. Reviewer rerun needs: key in `.env`, Node ≥22.18, `npm ci`, and local `tesseract` for the OCR predicates.
 
 ---
 
