@@ -85,6 +85,7 @@ export async function runScenario(
   let desktop: DesktopSurface | null = null;
   let snapshotId: string | null = null;
   let streamUrl: string | null = null;
+  let desktopRecordingUrl: string | null = null;
   let replayPath: string | null = null;
   let zipPath: string | null = null;
   let exceptionsCsvPath: string | null = null;
@@ -207,9 +208,18 @@ export async function runScenario(
     log(`run.fail ${(err as Error).message}`);
   }
 
-  // Dispose in reverse order, always — then fetch the async browser replay.
+  // Dispose in reverse order, always — but stop the desktop recording first:
+  // the guest uploads the mp4 on record.stop(), so disposing first loses it.
   for (const { name, surface } of [...live].reverse()) {
-    if (name === "desktop") await flushRing(surface as DesktopSurface);
+    if (name === "desktop") {
+      const d = surface as DesktopSurface;
+      await flushRing(d);
+      const url = await d.stopRecording().catch(() => null);
+      if (url) {
+        desktopRecordingUrl ??= url;
+        log(`desktop.recording url=${url}`);
+      }
+    }
     await surface.dispose().catch((e) => log(`dispose.warn ${name} ${(e as Error).message}`));
     budget.charge(name, surface.secondsUsed());
     emit({ t: now(), type: "cost", usd: budget.spentUsd });
@@ -237,6 +247,7 @@ export async function runScenario(
     // Free plan: one concurrent sandbox, already spent — dashboard is local.
     // Starter+: serve apps/dashboard from a sandbox and put previewUrl here.
     previewUrl: null,
+    desktopRecordingUrl,
     rewinds: journal.rewinds,
   });
   if (failed) report.ok = false;

@@ -88,6 +88,7 @@ close-pack.pdf      # formatted on the desktop, uploaded to the portal
 desktop-*.png       # ring-buffer frames incl. the focus-miss proof shot
 desktop-final.png   # the visible document — feeds the OCR predicate
 browser.ndjson      # rrweb replay (gzipped upload, polled ~30s after release)
+eval.json           # also carries desktopRecordingUrl — the VM-side mp4 of the LibreOffice moment
 dashboard.html      # static run viewer (steps, stream/replay links, cost)
 MANIFEST.sha256     # sha256 of every artifact — verify with `sha256sum -c`
 ```

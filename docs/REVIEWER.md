@@ -30,7 +30,7 @@ make demo     # the full three-surface vendor close
 
 While it runs (~3 min):
 
-- The **desktop `streamUrl`** is printed the moment the desktop boots — open it and watch LibreOffice receive the exceptions live over VNC.
+- The **desktop `streamUrl`** is printed the moment the desktop boots — open it and watch LibreOffice receive the exceptions live over VNC. The VM also records itself: `eval.json`'s `desktopRecordingUrl` is an mp4 of the whole desktop session (uploaded on `record.stop()`, harvested before dispose).
 - Expected cost: **~$0.14** on Starter (estimate from the published price sheet; printed at the end and in `eval.json`).
 - Expected exceptions: **exactly 2** (one transposed-digit amount, one invoice missing from the ledger — both seeded in `fixtures/`).
 

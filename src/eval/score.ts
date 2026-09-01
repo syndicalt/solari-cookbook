@@ -20,6 +20,7 @@ export interface ScoreInput {
   replayUrl: string | null;
   streamUrl: string | null;
   previewUrl: string | null;
+  desktopRecordingUrl: string | null;
   rewinds: number;
 }
 

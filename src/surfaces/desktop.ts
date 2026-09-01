@@ -38,11 +38,17 @@ const OPEN_SETTLE_MS = 4_000;
 /**
  * Structural slice of the `@solarisdk/core` `Desktop` handle this surface
  * uses. The real handle satisfies it; tests inject fakes. Anything not
- * listed here (clipboard, record, pkg, …) is intentionally out of scope.
+ * listed here (clipboard, pkg, …) is intentionally out of scope.
  */
 export interface DesktopLike {
   readonly sessionId: string;
   readonly streamUrl: string;
+  /**
+   * Presigned mp4 playback URL — set at create time when `record: true`.
+   * The guest uploads the mp4 on `record.stop()`, so the URL only resolves
+   * once a recording has been started AND stopped (SDK docs, desktop.d.ts).
+   */
+  readonly recordingUrl?: string | undefined;
   health(): Promise<{ ready: boolean }>;
   exec(
     cmd: string,
@@ -61,6 +67,11 @@ export interface DesktopLike {
   };
   screenshot(opts?: { format?: "png" | "jpeg" }): Promise<Uint8Array>;
   open(name: string, args?: string[]): Promise<number>;
+  /** VM-side screen recording: mp4 is uploaded by the guest on stop(). */
+  record: {
+    start(opts?: { fps?: number; format?: string }): Promise<unknown>;
+    stop(): Promise<unknown>;
+  };
   /** Local channel close — sync in the real SDK, async-safe here. */
   close(): void | Promise<void>;
 }
@@ -105,6 +116,12 @@ export interface DesktopSurface {
   /** Screenshot + push to the rewind ring. Label is short and grepable. */
   screenshot(label: string): Promise<Uint8Array>;
   formatLibreOffice(opts: FormatLibreOfficeOpts): Promise<FormatLibreOfficeResult>;
+  /**
+   * Stop the VM-side screen recording and return the presigned mp4 playback
+   * URL (null when not recording). Call BEFORE dispose: the guest uploads
+   * the mp4 on stop(), so a recording left running uploads nothing.
+   */
+  stopRecording(): Promise<string | null>;
   readonly sessionId: string | null;
   readonly streamUrl: string | null;
   secondsUsed(): number;
@@ -135,6 +152,7 @@ export class SolariDesktopSurface implements DesktopSurface {
   #endedAt: number | null = null;
   #disposed = false;
   #firstClickUsed = false;
+  #recording = false;
 
   constructor(config: NoapiConfig, deps: SolariDesktopDeps = {}) {
     this.#config = config;
@@ -201,10 +219,30 @@ export class SolariDesktopSurface implements DesktopSurface {
     // Wait for X11 before driving the GUI (cookbook: 30 × 1s health poll).
     for (let i = 0; i < HEALTH_POLLS; i++) {
       const health = await desktop.health();
-      if (health.ready) return desktop.streamUrl;
+      if (health.ready) {
+        if (opts.record) {
+          // VM-side mp4 capture of the LibreOffice moment — the footage the
+          // reviewer pack is cut from. Upload happens on record.stop().
+          await desktop.record.start();
+          this.#recording = true;
+          console.log(`desktop.record.start session=${desktop.sessionId}`);
+        }
+        return desktop.streamUrl;
+      }
       await this.#sleep(HEALTH_INTERVAL_MS);
     }
     throw new Error(`desktop.health not ready after ${HEALTH_POLLS}s — X11 never came up`);
+  }
+
+  async stopRecording(): Promise<string | null> {
+    if (!this.#recording || !this.#desktop) return null;
+    // stop() triggers the guest-side mp4 upload; the presigned recordingUrl
+    // only resolves after this. Never dispose first — that loses the footage.
+    await this.#desktop.record.stop();
+    this.#recording = false;
+    const url = this.#desktop.recordingUrl ?? null;
+    console.log(`desktop.record.stop url=${url ?? "pending"}`);
+    return url;
   }
 
   #requireDesktop(): DesktopLike {
@@ -378,6 +416,15 @@ export class SolariDesktopSurface implements DesktopSurface {
     this.#disposed = true;
     const desktop = this.#desktop;
     const sessionId = this.#sessionId;
+    // Safety net: a recording left running uploads nothing. The conductor
+    // calls stopRecording() explicitly first; this is the belt-and-braces.
+    if (this.#recording) {
+      try {
+        await this.stopRecording();
+      } catch {
+        // best-effort — dispose must not throw over lost footage
+      }
+    }
     if (desktop) {
       try {
         await desktop.close();

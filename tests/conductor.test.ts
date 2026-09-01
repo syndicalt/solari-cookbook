@@ -75,6 +75,7 @@ test("conductor happy path — green eval.json, full artifact pack", async (t) =
   assert.ok(report.predicates.every((p) => p.ok), JSON.stringify(report.predicates));
   assert.equal(report.rewinds, 0);
   assert.equal(report.scenario, "vendor-close");
+  assert.match(report.desktopRecordingUrl ?? "", /^https:\/\/rec\.example\/.+\.mp4$/, "desktop mp4 harvested before dispose");
 
   // The evidence pack on disk.
   for (const name of [

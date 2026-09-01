@@ -87,6 +87,8 @@ export interface EvalReport {
   replayUrl: string | null;
   streamUrl: string | null;
   previewUrl: string | null;
+  /** Presigned mp4 of the desktop session (VM-side record.stop upload). */
+  desktopRecordingUrl: string | null;
   rewinds: number;
 }
 

@@ -18,6 +18,7 @@ function input(predicates: ScoreInput["predicates"]): ScoreInput {
     replayUrl: null,
     streamUrl: "vnc://fake",
     previewUrl: null,
+    desktopRecordingUrl: null,
     rewinds: 0,
   };
 }

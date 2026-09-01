@@ -391,6 +391,12 @@ export class FakeDesktopSurface implements DesktopSurface {
     return elapsedSeconds(this.#startedAt, this.#endedAt);
   }
 
+  /** Mirrors the real surface: resolves a fake presigned mp4 URL when recording. */
+  async stopRecording(): Promise<string | null> {
+    if (this.startOpts?.record !== true) return null;
+    return `https://rec.example/${this.id}.mp4`;
+  }
+
   async dispose(): Promise<void> {
     this.disposeCalls += 1;
     this.#endedAt = Date.now();

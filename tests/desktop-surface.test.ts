@@ -106,6 +106,19 @@ class FakeDesktop implements DesktopLike {
     return this.openImpl(name, args);
   }
 
+  recordingUrl: string | undefined = "https://rec.example/sess-test.mp4";
+  recordCalls = { start: 0, stop: 0 };
+  record = {
+    start: async (): Promise<unknown> => {
+      this.recordCalls.start += 1;
+      return {};
+    },
+    stop: async (): Promise<unknown> => {
+      this.recordCalls.stop += 1;
+      return {};
+    },
+  };
+
   close(): void {
     this.closeCalls += 1;
   }
@@ -228,6 +241,36 @@ test("secondsUsed is zero before start and positive after", async () => {
   assert.equal(surface.secondsUsed(), 0);
   await captureLogs(() => surface.start());
   assert.ok(surface.secondsUsed() >= 0);
+});
+
+test("record lifecycle: start on record:true, stopRecording returns the mp4 URL", async () => {
+  const { desktop, surface } = makeSurface();
+  await captureLogs(() => surface.start({ record: true }));
+  assert.equal(desktop.recordCalls.start, 1);
+
+  const { result: url } = await captureLogs(() => surface.stopRecording());
+  assert.equal(desktop.recordCalls.stop, 1);
+  assert.equal(url, "https://rec.example/sess-test.mp4");
+
+  // Second stop is a no-op; nothing left running.
+  assert.equal(await surface.stopRecording(), null);
+  assert.equal(desktop.recordCalls.stop, 1);
+});
+
+test("dispose auto-stops a recording left running (footage safety net)", async () => {
+  const { desktop, surface } = makeSurface();
+  await captureLogs(() => surface.start({ record: true }));
+  await captureLogs(() => surface.dispose());
+  assert.equal(desktop.recordCalls.start, 1);
+  assert.equal(desktop.recordCalls.stop, 1, "dispose must stop the recording before destroy");
+  assert.equal(desktop.closeCalls, 1);
+});
+
+test("no recording when record is not requested", async () => {
+  const { desktop, surface } = makeSurface();
+  await captureLogs(() => surface.start());
+  assert.equal(desktop.recordCalls.start, 0);
+  assert.equal(await surface.stopRecording(), null);
 });
 
 test("formatLibreOffice happy path: upload, GUI open, sentinel, headless convert, pdf back", async () => {

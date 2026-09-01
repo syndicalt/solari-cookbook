@@ -22,6 +22,7 @@ function report(overrides: Partial<EvalReport> = {}): EvalReport {
     replayUrl: null,
     streamUrl: null,
     previewUrl: null,
+    desktopRecordingUrl: null,
     rewinds: 0,
     ...overrides,
   };
