@@ -24,6 +24,7 @@ const CONFIG: NoapiConfig = {
   portalUser: "u",
   portalPassword: "p",
   plan: "free",
+    portalMode: "local",
 };
 
 interface ExecResult {
@@ -63,6 +64,11 @@ class FakeDesktop implements DesktopLike {
   async health(): Promise<{ ready: boolean }> {
     this.healthCalls += 1;
     return { ready: this.healthCalls >= this.readyOnPoll };
+  }
+
+  connectCalls = 0;
+  async connect(): Promise<void> {
+    this.connectCalls += 1;
   }
 
   async exec(cmd: string, opts?: { args?: string[] }): Promise<ExecResult> {
@@ -164,8 +170,9 @@ async function captureLogs<T>(fn: () => Promise<T>): Promise<{ result: T; lines:
 /** soffice present, headless convert succeeds, pdf readable. */
 function libreOfficeExec(desktop: FakeDesktop): void {
   desktop.execImpl = (cmd, args) => {
-    if (cmd === "command" && args[0] === "-v") {
-      return { exitCode: args[1] === "soffice" ? 0 : 1, stdout: "", stderr: "" };
+    // Probes go through the shell: exec("sh", ["-c", "command -v <name>"]).
+    if (cmd === "sh" && args[0] === "-c" && (args[1] ?? "").startsWith("command -v")) {
+      return { exitCode: args[1] === "command -v soffice" ? 0 : 1, stdout: "", stderr: "" };
     }
     if (cmd === "soffice" && args.includes("--convert-to")) {
       desktop.files.set("/work/exceptions.pdf", new Uint8Array([0x25, 0x50, 0x44, 0x46]));
@@ -204,7 +211,7 @@ test("openApp probes the binary, falls back to the alias, then errors listing pr
 
   // soffice missing, libreoffice present → alias wins
   desktop.execImpl = (_cmd, args) => ({
-    exitCode: args[1] === "libreoffice" ? 0 : 1,
+    exitCode: args[1] === "command -v libreoffice" ? 0 : 1,
     stdout: "",
     stderr: "",
   });
@@ -212,7 +219,7 @@ test("openApp probes the binary, falls back to the alias, then errors listing pr
   assert.equal(pid, 4321);
   assert.deepEqual(
     desktop.execCalls.map((c) => c.args[1]),
-    ["soffice", "libreoffice"],
+    ["command -v soffice", "command -v libreoffice"],
   );
   assert.equal(desktop.openCalls[0]!.name, "libreoffice");
 
@@ -294,11 +301,19 @@ test("formatLibreOffice happy path: upload, GUI open, sentinel, headless convert
       name: "soffice",
       args: ["--calc", "/work/exceptions.csv"],
     });
-    // clicked the calibrated point, never screen center
-    assert.deepEqual(desktop.clicks, [{ x: 320, y: 300 }]);
-    // sentinel typed + undone, then the real title
-    assert.deepEqual(desktop.types, [FOCUS_SENTINEL, "EXCEPTIONS\n"]);
-    assert.deepEqual(desktop.hotkeys, [["ctrl", "z"]]);
+    // Text Import modal dismissed via OK, Tip-of-the-Day blind-dismissed,
+    // then the sentinel flow: focus click, commit click, reselect, commit
+    assert.deepEqual(desktop.clicks, [
+      { x: 943, y: 703 },
+      { x: 873, y: 508 },
+      { x: 320, y: 300 },
+      { x: 600, y: 450 },
+      { x: 320, y: 300 },
+      { x: 600, y: 450 },
+    ]);
+    // sentinel typed then overwritten by the real title — no chords, no "\n"
+    assert.deepEqual(desktop.types, [FOCUS_SENTINEL, "EXCEPTIONS"]);
+    assert.deepEqual(desktop.hotkeys, []);
     // headless convert issued
     assert.ok(
       desktop.execCalls.some(
@@ -377,8 +392,14 @@ test("NOAPI_FORCE_FOCUS_MISS=1 sends the first click to screen center and the se
       });
     });
 
-    assert.ok(lines.some((l) => l.startsWith("desktop.force_focus_miss first_click=center")));
-    assert.deepEqual(desktop.clicks, [{ x: 640, y: 360 }]);
+    assert.ok(lines.some((l) => l.startsWith("desktop.force_focus_miss action=cancel_import_dialog")));
+    // The Text Import modal is CANCELED (no document loads), then the center
+    // click into the Start Center, then the commit click before the throw.
+    assert.deepEqual(desktop.clicks, [
+      { x: 848, y: 703 },
+      { x: 640, y: 360 },
+      { x: 600, y: 450 },
+    ]);
   } finally {
     if (prev === undefined) delete process.env.NOAPI_FORCE_FOCUS_MISS;
     else process.env.NOAPI_FORCE_FOCUS_MISS = prev;

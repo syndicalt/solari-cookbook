@@ -10,6 +10,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { NoapiConfig, PredicateResult, SuccessPredicate } from "../types.ts";
 import { ocrPng, ocrAvailable } from "./ocr.ts";
+import { portalUrl } from "../portal-url.ts";
 
 /** Injectable seams so tests never need tesseract or a network. */
 export interface PredicateDeps {
@@ -50,15 +51,24 @@ export async function portalGetAuthed(
   fetchFn: typeof fetch = fetch,
 ): Promise<{ status: number; body: unknown }> {
   const origin = config.portalOrigin;
-  const login = await fetchFn(`${origin}/login`, {
+  // portalUrl() keeps any preview-gateway query (pt_token) on every request —
+  // the gateway 401s token-less requests and sets no session cookie.
+  const login = await fetchFn(portalUrl(origin, "/login"), {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ email: config.portalUser, password: config.portalPassword }).toString(),
     redirect: "manual",
   });
-  const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0];
+  // Behind the preview gateway the response carries MULTIPLE set-cookie
+  // headers (AWSALB stickiness + the portal sid). headers.get() would join
+  // them with commas; getSetCookie() keeps them separate. Pick the portal
+  // session cookie by name — verified live against a preview URL.
+  const cookie = login.headers
+    .getSetCookie()
+    .map((c) => c.split(";")[0]!)
+    .find((c) => c.startsWith("sid="));
   if (!cookie) return { status: 401, body: { ok: false, error: "login failed" } };
-  const res = await fetchFn(`${origin}${urlPath}`, { headers: { cookie } });
+  const res = await fetchFn(portalUrl(origin, urlPath), { headers: { cookie } });
   return { status: res.status, body: await res.json().catch(() => null) };
 }
 
@@ -99,7 +109,12 @@ export async function evaluatePredicate(
       }
       try {
         const text = await ocr(full);
-        const ok = text.toUpperCase().includes(p.text.toUpperCase());
+        // Case-SENSITIVE on purpose: the typed title is uppercase, while a
+        // window title like "exceptions.csv - LibreOffice Calc" satisfies a
+        // case-insensitive match vacuously (observed on a real flaky run:
+        // the dialog was up, nothing was typed, and the predicate still
+        // passed). Success must mean OUR text is on screen.
+        const ok = text.includes(p.text);
         return { name, ok, detail: ok ? undefined : `ocr did not find ${JSON.stringify(p.text)}` };
       } catch (err) {
         return { name, ok: false, detail: (err as Error).message };

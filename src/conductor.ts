@@ -61,7 +61,7 @@ export async function runScenario(
 ): Promise<EvalReport> {
   const now = deps.now ?? Date.now;
   const log = deps.logger ?? ((line: string) => console.log(line));
-  const factory = deps.surfaces ?? solariFactory(config);
+  let factory = deps.surfaces ?? solariFactory(config);
 
   const runId = ulid(now());
   const dir = join(deps.artifactsRoot ?? "artifacts", runId);
@@ -87,6 +87,8 @@ export async function runScenario(
   let streamUrl: string | null = null;
   let desktopRecordingUrl: string | null = null;
   let replayPath: string | null = null;
+  /** Config the run actually uses — portalMode "sandbox" rewrites the origin. */
+  let runConfig = config;
   let zipPath: string | null = null;
   let exceptionsCsvPath: string | null = null;
   let pdfPath: string | null = null;
@@ -175,6 +177,25 @@ export async function runScenario(
   };
 
   try {
+    // Portal-in-sandbox mode: a cloud browser cannot reach this machine's
+    // localhost, and a 1-VM account cannot run a second sandbox just for the
+    // portal — so the run's own sandbox serves it via previewUrl, and every
+    // surface downstream uses the public URL. The same VM then also runs
+    // reconciliation: one sandbox total, the entire world is Solari.
+    if (runConfig.portalMode === "sandbox") {
+      // Assign to the shared ref: reconciliation must reuse THIS VM, not
+      // boot a second one (the whole point on 1-concurrent-VM accounts).
+      const sb = (sandbox ??= acquire("sandbox", factory.sandbox));
+      await sb.start({});
+      const portalOrigin = await sb.servePortal(8787);
+      log(`portal.sandbox url=${portalOrigin}`);
+      runConfig = { ...config, portalOrigin };
+      // Surfaces capture config at construction; rebind the production
+      // factory so the browser surface sees the preview URL. Injected
+      // factories (tests) manage their own config.
+      if (!deps.surfaces) factory = solariFactory(runConfig);
+    }
+
     for (const step of scenario.steps) {
       if (now() > deadline) throw new Error(`run.timeout exceeded ${scenario.timeoutMs}ms before step ${step.id}`);
       let attempt = 0;
@@ -197,7 +218,25 @@ export async function runScenario(
           log(`rewind step=${step.id} reason=${decision.reason} snapshot=${snapshotId ?? "none"}`);
           if (step.surface === "desktop") {
             const sb = sandbox as SandboxSurface | null; // CFA can't see closure assignments
-            if (snapshotId && sb) await sb.revert(snapshotId);
+            if (snapshotId && sb && process.env.NOAPI_REWIND_REVERT === "1") {
+              // Opt-in only: on the current pool, revert reports "Not
+              // revertable" AND the attempt itself disrupts the VM — twice
+              // observed live: heartbeats fail right after the call, and the
+              // previewUrl portal 404s (the upload step then dies).
+              // TODO(solari-api): re-enable by default once revert is
+              // non-destructive (https://docs.getsolari.com).
+              try {
+                await sb.revert(snapshotId);
+              } catch (revertErr) {
+                log(`sandbox.revert_failed ${(revertErr as Error).message} — continuing without restore`);
+              }
+            } else if (snapshotId) {
+              // The revert is protective, not load-bearing: nothing writes
+              // to the sandbox after the snapshot, so its state is already
+              // last-good. The half of the rewind that matters is the fresh
+              // desktop below.
+              log(`rewind.norevert snapshot=${snapshotId} state=last-good`);
+            }
             await resetDesktop();
           }
         }
@@ -207,6 +246,11 @@ export async function runScenario(
     failed = true;
     log(`run.fail ${(err as Error).message}`);
   }
+
+  // Eval predicates run BEFORE dispose: in portal-sandbox mode the portal
+  // dies with the sandbox, so portalAccepted must be checked while every
+  // surface is still up. On abort, unmet predicates fail honestly.
+  const predicateResults = await evaluateAll(scenario.success, dir, runConfig, deps.predicateDeps);
 
   // Dispose in reverse order, always — but stop the desktop recording first:
   // the guest uploads the mp4 on record.stop(), so disposing first loses it.
@@ -229,12 +273,11 @@ export async function runScenario(
     if (replayPath) emit({ t: now(), type: "artifact", path: replayPath });
   }
 
-  // Eval is the source of truth. On abort, unmet predicates fail honestly.
-  const predicates = await evaluateAll(scenario.success, dir, config, deps.predicateDeps);
+  // Eval is the source of truth (predicates were evaluated pre-dispose).
   const report = buildReport({
     runId,
     scenario: scenario.id,
-    predicates,
+    predicates: predicateResults,
     wallMs: now() - wallStart,
     costUsdEstimate: budget.spentUsd,
     surfaces: {

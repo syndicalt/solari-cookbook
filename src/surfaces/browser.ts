@@ -19,6 +19,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { Solari, StorageState } from "@solarisdk/browser";
 import { ROUTES, SELECTORS } from "../../apps/portal/selectors.ts";
+import { portalUrl } from "../portal-url.ts";
 import type { NoapiConfig } from "../types.ts";
 
 /* ------------------------------------------------------------------------ */
@@ -47,6 +48,8 @@ export interface PageLike {
   waitForEvent(event: "download"): Promise<DownloadLike>;
   setInputFiles(selector: string, files: string): Promise<void>;
   context(): ContextLike;
+  /** Cheapest possible page touch — used by the idle-timeout heartbeat. */
+  evaluate(script: string): Promise<unknown>;
 }
 
 export interface BrowserLike {
@@ -92,6 +95,13 @@ export interface BrowserStartOptions {
   stealth?: boolean;
   /** Profile name to find-or-create and attach. */
   profile?: string;
+  /**
+   * Heartbeat interval that keeps the session's idle timeout alive while
+   * other surfaces work (a 9-minute desktop step killed the browser mid-run
+   * in a live flaky test — the upload then failed with "browser has been
+   * closed"). Default 60s; 0 disables.
+   */
+  heartbeatMs?: number;
 }
 
 export interface BrowserSurface {
@@ -121,6 +131,7 @@ export interface BrowserDeps {
 
 const REPLAY_ATTEMPTS = 10;
 const REPLAY_POLL_DELAY_MS = 3_000;
+const DEFAULT_HEARTBEAT_MS = 60_000;
 
 /* ------------------------------------------------------------------------ */
 /* Implementation.                                                          */
@@ -133,6 +144,7 @@ export class SolariBrowserSurface implements BrowserSurface {
   #browser: BrowserLike | null = null;
   #page: PageLike | null = null;
   #profileId: string | null = null;
+  #heartbeat: ReturnType<typeof setInterval> | null = null;
   #startedAt: number | null = null;
   #endedAt: number | null = null;
   #disposed = false;
@@ -176,6 +188,24 @@ export class SolariBrowserSurface implements BrowserSurface {
     this.#page = await this.#browser.newPage();
     this.#startedAt = Date.now();
     this.#log(`browser.start session=${this.#browser.id} recording=true stealth=${this.#browser ? wantStealth : false}`);
+
+    const heartbeatMs = opts.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
+    if (heartbeatMs > 0) {
+      // The browser sits idle while the sandbox/desktop steps run — a long
+      // desktop step outlives the session's idle timeout (observed live:
+      // "browser has been closed" at the upload step). The cheapest page
+      // touch resets it. Failures are logged, never thrown.
+      this.#heartbeat = setInterval(() => void this.#beat(), heartbeatMs);
+      this.#heartbeat.unref();
+    }
+  }
+
+  async #beat(): Promise<void> {
+    try {
+      await this.#page?.evaluate("1");
+    } catch {
+      this.#log("browser.heartbeat fail");
+    }
   }
 
   page(): PageLike {
@@ -185,7 +215,7 @@ export class SolariBrowserSurface implements BrowserSurface {
 
   async loginPortal(): Promise<void> {
     const page = this.page();
-    await page.goto(this.#config.portalOrigin + ROUTES.login);
+    await page.goto(portalUrl(this.#config.portalOrigin, ROUTES.login));
     await page.fill(SELECTORS.loginEmail, this.#config.portalUser);
     await page.fill(SELECTORS.loginPassword, this.#config.portalPassword);
     await page.click(SELECTORS.loginSubmit);
@@ -196,7 +226,7 @@ export class SolariBrowserSurface implements BrowserSurface {
   async downloadInvoices(destDir: string): Promise<string> {
     const page = this.page();
     await mkdir(destDir, { recursive: true });
-    await page.goto(this.#config.portalOrigin + ROUTES.invoices);
+    await page.goto(portalUrl(this.#config.portalOrigin, ROUTES.invoices));
     const [download] = await Promise.all([
       page.waitForEvent("download"),
       page.click(SELECTORS.invoicesDownload),
@@ -209,7 +239,7 @@ export class SolariBrowserSurface implements BrowserSurface {
 
   async uploadPack(pdfPath: string): Promise<void> {
     const page = this.page();
-    await page.goto(this.#config.portalOrigin + ROUTES.closeSubmit);
+    await page.goto(portalUrl(this.#config.portalOrigin, ROUTES.closeSubmit));
     await page.setInputFiles(SELECTORS.uploadFile, pdfPath);
     await page.click(SELECTORS.uploadSubmit);
     await page.waitForSelector(SELECTORS.uploadStatus, { state: "visible" });
@@ -267,6 +297,10 @@ export class SolariBrowserSurface implements BrowserSurface {
   async dispose(): Promise<void> {
     if (this.#disposed) return;
     this.#disposed = true;
+    if (this.#heartbeat) {
+      clearInterval(this.#heartbeat);
+      this.#heartbeat = null;
+    }
     const id = this.sessionId;
     try {
       // `browser.close()` also RELEASES the session. Closing the browser alone

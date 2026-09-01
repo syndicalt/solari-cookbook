@@ -43,10 +43,10 @@ const execFileAsync = promisify(execFile);
  */
 const MIN_SECONDS = 0.5;
 
-/** A real, tiny PNG (1x1 gray) — deterministic, no encoder needed. */
+/** A real, tiny PNG (1x1, libpng/leptonica-valid) — deterministic, no encoder needed. */
 export const TINY_PNG: Uint8Array = new Uint8Array(
   Buffer.from(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNsaGj4DwAFhAJ/2eBU9AAAAABJRU5ErkJggg==",
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
     "base64",
   ),
 );
@@ -280,6 +280,14 @@ export class FakeSandboxSurface implements SandboxSurface {
     return `https://fake.preview.getsolari.com/${this.id}/${port}`;
   }
 
+  /** Simulated servePortal: records the call, returns the configured URL. */
+  portalServes: number[] = [];
+  portalUrl: string | null = null;
+  async servePortal(port: number): Promise<string> {
+    this.portalServes.push(port);
+    return this.portalUrl ?? `https://fake.preview.getsolari.com/${this.id}/${port}`;
+  }
+
   get sandboxId(): string | null {
     return this.#startedAt === null ? null : this.id;
   }
@@ -436,6 +444,9 @@ export function makeFakeFactory(
     },
     sandbox() {
       const s = new FakeSandboxSurface(`fake-sandbox-${created.sandboxes.length + 1}`);
+      // Portal-mode runs: the fake "preview URL" is just the real local
+      // portal, so the fake browser's HTTP flow still works end to end.
+      s.portalUrl = config.portalOrigin;
       created.sandboxes.push(s);
       return s;
     },

@@ -101,6 +101,13 @@ export interface NoapiConfig {
   portalPassword: string;
   /** Solari plan tier, used for pricing and feature degrade. */
   plan: "free" | "starter";
+  /**
+   * Where the portal lives for this run. "local" = already-running origin
+   * (offline/dev). "sandbox" = conductor deploys the portal into the run's
+   * own sandbox and serves it via previewUrl — required on accounts limited
+   * to one concurrent VM, since a cloud browser cannot reach localhost.
+   */
+  portalMode: "local" | "sandbox";
 }
 
 /** Thrown when the desktop focus sentinel does not confirm a click landed. */

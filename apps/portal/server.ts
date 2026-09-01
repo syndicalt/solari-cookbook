@@ -26,6 +26,8 @@ export interface PortalOptions {
   user?: string;
   /** Seeded login password. Default reviewer. */
   password?: string;
+  /** Bind address. Default 127.0.0.1; use 0.0.0.0 behind the sandbox preview gateway. */
+  host?: string;
 }
 
 /** Handle returned by {@link createPortal}. */
@@ -69,12 +71,23 @@ ${body}
 `;
 }
 
-function loginPage(error: boolean): string {
+/**
+ * Query suffix that keeps a sandbox preview-gateway token (`pt_token`)
+ * alive across in-portal navigation. The gateway 401s any request without
+ * it and sets no session cookie, so every link, form action, and redirect
+ * must carry it forward. Empty when the portal is reached directly.
+ */
+function tokenSuffix(reqUrl: string): string {
+  const token = new URL(reqUrl, "http://localhost").searchParams.get("pt_token");
+  return token ? `?pt_token=${encodeURIComponent(token)}` : "";
+}
+
+function loginPage(error: boolean, tok: string): string {
   return page(
     "sign in",
     `<h1>vendor portal sign in</h1>
 ${error ? '<p data-testid="login-error">invalid email or password</p>' : ""}
-<form method="post" action="${ROUTES.login}">
+<form method="post" action="${ROUTES.login}${tok}">
   <label>email <input type="email" name="email" data-testid="login-email" required></label>
   <label>password <input type="password" name="password" data-testid="login-password" required></label>
   <button type="submit" data-testid="login-submit">sign in</button>
@@ -82,18 +95,18 @@ ${error ? '<p data-testid="login-error">invalid email or password</p>' : ""}
   );
 }
 
-function homePage(): string {
+function homePage(tok: string): string {
   return page(
     "home",
     `<h1>monthly close</h1>
 <ul>
-  <li><a href="${ROUTES.invoices}">june 2026 invoices</a></li>
-  <li><a href="${ROUTES.closeSubmit}">submit close pack</a></li>
+  <li><a href="${ROUTES.invoices}${tok}">june 2026 invoices</a></li>
+  <li><a href="${ROUTES.closeSubmit}${tok}">submit close pack</a></li>
 </ul>`,
   );
 }
 
-function invoicesPage(names: string[]): string {
+function invoicesPage(names: string[], tok: string): string {
   const items = names.map((name) => `<li>${escapeHtml(name)}</li>`).join("\n");
   return page(
     "invoices",
@@ -101,16 +114,16 @@ function invoicesPage(names: string[]): string {
 <ul>
 ${items}
 </ul>
-<p><a href="${ROUTES.invoicesZip}" data-testid="invoices-download">download all (zip)</a></p>`,
+<p><a href="${ROUTES.invoicesZip}${tok}" data-testid="invoices-download">download all (zip)</a></p>`,
   );
 }
 
-function submitPage(status: string | null): string {
+function submitPage(status: string | null, tok: string): string {
   return page(
     "submit close pack",
     `<h1>submit close pack</h1>
 ${status ? `<p data-testid="upload-status">${escapeHtml(status)}</p>` : ""}
-<form method="post" action="${ROUTES.closeSubmit}" enctype="multipart/form-data">
+<form method="post" action="${ROUTES.closeSubmit}${tok}" enctype="multipart/form-data">
   <input type="file" name="file" data-testid="upload-file" accept="application/pdf" required>
   <button type="submit" data-testid="upload-submit">upload</button>
 </form>`,
@@ -161,6 +174,10 @@ export async function createPortal(options: PortalOptions = {}): Promise<PortalH
   const port = options.port ?? Number(process.env.NOAPI_PORTAL_PORT ?? process.env.PORT ?? 8787);
   const user = options.user ?? process.env.NOAPI_PORTAL_USER ?? "reviewer@getsolari.com";
   const password = options.password ?? process.env.NOAPI_PORTAL_PASSWORD ?? "reviewer";
+  // Bind address. Default loopback is safe for local dev; the sandbox
+  // deployment sets NOAPI_PORTAL_HOST=0.0.0.0 because the preview gateway
+  // reaches the server over the VM's network interface, not loopback.
+  const host = options.host ?? process.env.NOAPI_PORTAL_HOST ?? "127.0.0.1";
 
   const sessions = new Map<string, { user: string }>();
   const zip = buildInvoicesZip();
@@ -196,11 +213,11 @@ export async function createPortal(options: PortalOptions = {}): Promise<PortalH
   };
 
   /** Unauthed HTML requests bounce to /login; API-ish requests get 401 JSON. */
-  const rejectUnauthed = (res: ServerResponse, json: boolean): void => {
+  const rejectUnauthed = (res: ServerResponse, json: boolean, tok: string): void => {
     if (json) {
       sendJson(res, 401, { ok: false, error: "unauthorized" });
     } else {
-      res.writeHead(302, { location: ROUTES.login });
+      res.writeHead(302, { location: ROUTES.login + tok });
       res.end();
     }
   };
@@ -211,9 +228,10 @@ export async function createPortal(options: PortalOptions = {}): Promise<PortalH
       const path = url.pathname;
       const method = req.method ?? "GET";
       const who = authedUser(req);
+      const tok = tokenSuffix(req.url ?? "/");
 
       if (method === "GET" && path === ROUTES.login) {
-        sendHtml(res, 200, loginPage(false));
+        sendHtml(res, 200, loginPage(false, tok));
         return;
       }
 
@@ -224,30 +242,30 @@ export async function createPortal(options: PortalOptions = {}): Promise<PortalH
           const sid = randomUUID();
           sessions.set(sid, { user });
           res.writeHead(302, {
-            location: ROUTES.home,
+            location: ROUTES.home + tok,
             "set-cookie": `${COOKIE_NAME}=${sid}; HttpOnly; Path=/`,
           });
           res.end();
         } else {
-          sendHtml(res, 401, loginPage(true));
+          sendHtml(res, 401, loginPage(true, tok));
         }
         return;
       }
 
       if (method === "GET" && path === ROUTES.home) {
-        if (!who) return rejectUnauthed(res, false);
-        sendHtml(res, 200, homePage());
+        if (!who) return rejectUnauthed(res, false, tok);
+        sendHtml(res, 200, homePage(tok));
         return;
       }
 
       if (method === "GET" && path === ROUTES.invoices) {
-        if (!who) return rejectUnauthed(res, false);
-        sendHtml(res, 200, invoicesPage(invoiceNames));
+        if (!who) return rejectUnauthed(res, false, tok);
+        sendHtml(res, 200, invoicesPage(invoiceNames, tok));
         return;
       }
 
       if (method === "GET" && path === ROUTES.invoicesZip) {
-        if (!who) return rejectUnauthed(res, true);
+        if (!who) return rejectUnauthed(res, true, tok);
         res.writeHead(200, {
           "content-type": "application/zip",
           "content-disposition": 'attachment; filename="2026-06.zip"',
@@ -258,17 +276,17 @@ export async function createPortal(options: PortalOptions = {}): Promise<PortalH
       }
 
       if (method === "GET" && path === ROUTES.closeSubmit) {
-        if (!who) return rejectUnauthed(res, false);
-        sendHtml(res, 200, submitPage(null));
+        if (!who) return rejectUnauthed(res, false, tok);
+        sendHtml(res, 200, submitPage(null, tok));
         return;
       }
 
       if (method === "POST" && path === ROUTES.closeSubmit) {
-        if (!who) return rejectUnauthed(res, false);
+        if (!who) return rejectUnauthed(res, false, tok);
         const body = await readBody(req);
         const file = parseMultipart(body, req.headers["content-type"] ?? "");
         if (!file || !file.filename.toLowerCase().endsWith(".pdf")) {
-          sendHtml(res, 400, submitPage("rejected: a .pdf file is required"));
+          sendHtml(res, 400, submitPage("rejected: a .pdf file is required", tok));
           return;
         }
         const sha256 = createHash("sha256").update(file.data).digest("hex");
@@ -278,12 +296,12 @@ export async function createPortal(options: PortalOptions = {}): Promise<PortalH
           sha256,
           receivedAt: new Date().toISOString(),
         };
-        sendHtml(res, 200, submitPage(`accepted ${sha256.slice(0, 12)}`));
+        sendHtml(res, 200, submitPage(`accepted ${sha256.slice(0, 12)}`, tok));
         return;
       }
 
       if (method === "GET" && path === ROUTES.closeLast) {
-        if (!who) return rejectUnauthed(res, true);
+        if (!who) return rejectUnauthed(res, true, tok);
         if (!lastUpload) {
           sendJson(res, 404, { ok: false });
           return;
@@ -305,7 +323,7 @@ export async function createPortal(options: PortalOptions = {}): Promise<PortalH
 
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(port, "127.0.0.1", () => resolve());
+    server.listen(port, host, () => resolve());
   });
 
   const address = server.address();

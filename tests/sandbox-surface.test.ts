@@ -31,6 +31,7 @@ function config(overrides: Partial<NoapiConfig> = {}): NoapiConfig {
     portalUser: "reviewer@getsolari.com",
     portalPassword: "reviewer",
     plan: "free",
+    portalMode: "local",
     ...overrides,
   };
 }
@@ -139,6 +140,15 @@ test("start creates a base sandbox with a rolling idle window and connects", asy
   assert.equal(sandbox.connectCalls, 1);
   assert.equal(surface.sandboxId, "sbx-1");
   assert.ok(surface.secondsUsed() >= 0);
+  await surface.dispose();
+});
+
+test("start is idempotent — a second start() never re-creates the VM", async () => {
+  const { client, sandbox, surface } = harness();
+  await surface.start({ heartbeatMs: 0 });
+  await surface.start({ heartbeatMs: 0 });
+  assert.equal(client.createCalls.length, 1, "portal-mode starts the VM twice by design");
+  assert.equal(sandbox.connectCalls, 1);
   await surface.dispose();
 });
 

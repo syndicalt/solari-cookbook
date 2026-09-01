@@ -15,9 +15,13 @@
  * into the VM and `reconcile.py` runs inside it.
  */
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
+import { join, relative } from "node:path";
 import type { SolariClient } from "@solarisdk/sdk";
 import type { NoapiConfig } from "../types.ts";
+import { listFiles } from "../manifest.ts";
+import { portalUrl } from "../portal-url.ts";
+import { buildPortalJs } from "../../scripts/build-portal-js.ts";
 
 /* ------------------------------------------------------------------------ */
 /* Structural SDK types — the smallest slice of @solarisdk/sdk we use.      */
@@ -86,6 +90,14 @@ export interface SandboxSurface {
   readText(path: string): Promise<string>;
   sh(script: string): Promise<{ stdout: string; exitCode: number }>;
   reconcileLedger(opts: ReconcileOptions): Promise<ReconcileResult>;
+  /**
+   * Deploy the fake vendor portal into THIS sandbox and expose it via
+   * `previewUrl` (cookbook: sandbox-port-preview-ts). Required for live runs:
+   * a cloud browser cannot reach the conductor's localhost, and accounts
+   * limited to one concurrent VM cannot afford a second sandbox just to
+   * serve the portal. Returns the public, token-bearing URL.
+   */
+  servePortal(port: number): Promise<string>;
   snapshot(name?: string): Promise<string>;
   revert(snapshotId: string): Promise<void>;
   previewUrl(port: number): Promise<string>;
@@ -125,6 +137,10 @@ export class SolariSandboxSurface implements SandboxSurface {
   }
 
   async start(opts: SandboxStartOptions = {}): Promise<void> {
+    // Idempotent: portal-mode starts the VM before the browser steps, and the
+    // reconcile action starts it again — a second create() would hit the
+    // account's concurrency limit ("Too many concurrent sessions").
+    if (this.#sandbox) return;
     const client = await this.#sdk();
     this.#sandbox = await client.sandboxes.create({
       template: opts.template ?? "base",
@@ -207,6 +223,45 @@ export class SolariSandboxSurface implements SandboxSurface {
     const chartPng = await sandbox.files.read(`${workdir}/chart.png`);
     this.#log(`sandbox.reconcile exceptions=${exceptions}`);
     return { exceptionsCsv, chartPng, exceptions };
+  }
+
+  async servePortal(port: number): Promise<string> {
+    const sandbox = this.#require();
+    // The base template ships node 18 (probed), so the portal is transpiled
+    // to plain ESM JS first; the on-VM layout preserves what zip.js's
+    // DEFAULT_INVOICES_DIR (../../fixtures/invoices) resolves against.
+    const buildDir = buildPortalJs();
+    const mkdir = await this.sh("mkdir -p /app/apps/portal /app/fixtures/invoices");
+    if (mkdir.exitCode !== 0) throw new Error(`sandbox.portal mkdir failed exit=${mkdir.exitCode}`);
+    for (const file of listFiles(buildDir)) {
+      await sandbox.files.write(join("/app", relative(buildDir, file)), new Uint8Array(readFileSync(file)));
+    }
+
+    // commands.run waits for exit — background the server with nohup
+    // (cookbook). Host 0.0.0.0: the preview gateway is not on the VM loopback.
+    const start = await this.sh(
+      `cd /app && NOAPI_PORTAL_HOST=0.0.0.0 PORT=${port} nohup node apps/portal/server.js > /app/portal.log 2>&1 &`,
+    );
+    if (start.exitCode !== 0) throw new Error(`sandbox.portal start failed exit=${start.exitCode}`);
+
+    const { url } = await sandbox.previewUrl(port);
+    // Poll until the portal answers through the gateway (cookbook polls
+    // 10 × 1s; we allow 30). portalUrl keeps the gateway's pt_token query
+    // on the request — token-less requests get a 401 from the gateway.
+    for (let i = 0; i < 30; i++) {
+      try {
+        const res = await fetch(portalUrl(url, "/login"));
+        if (res.status === 200) {
+          this.#log(`sandbox.portal url=${url}`);
+          return url;
+        }
+      } catch {
+        /* gateway not up yet */
+      }
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    const log = await this.sh("cat /app/portal.log");
+    throw new Error(`sandbox.portal not up after 30s — portal.log: ${log.stdout.trim()}`);
   }
 
   async snapshot(name?: string): Promise<string> {

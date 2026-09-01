@@ -38,13 +38,21 @@ export async function doctor(config: NoapiConfig): Promise<number> {
     console.log(`doctor: session id ${browser.id}`);
     try {
       const page = await browser.newPage();
-      await page.goto(`${config.portalOrigin}/login`);
-      console.log(`doctor: portal reachable (${await page.title()})`);
+      // The portal is only reachable from a cloud browser when it is itself
+      // public (see scripts/portal-sandbox.ts) — 127.0.0.1 here is the
+      // browser VM, not this machine. Warn, don't fail: doctor proves
+      // launch + clean dispose, not portal networking.
+      try {
+        await page.goto(`${config.portalOrigin}/login`, { timeout: 10_000 });
+        console.log(`doctor: portal reachable (${await page.title()})`);
+      } catch {
+        console.log(`doctor: portal not reachable from the cloud browser (${config.portalOrigin}) — expected for a local portal; demo deploys it via previewUrl`);
+      }
     } finally {
       await browser.close(); // releases the session slot
     }
     await solari.close(); // drops the loopback proxy — skip this and the process hangs
-    console.log("doctor: ok — launched, reached portal, disposed cleanly");
+    console.log("doctor: ok — launched, disposed cleanly");
     return 0;
   } catch (err) {
     console.error(`doctor: failed: ${(err as Error).message}`);

@@ -21,6 +21,7 @@ const CONFIG: NoapiConfig = {
   portalUser: "u",
   portalPassword: "p",
   plan: "free",
+    portalMode: "local",
 };
 
 test("ocrAvailable never throws and agrees with ocrPng", async () => {

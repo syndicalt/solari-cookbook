@@ -23,15 +23,16 @@ That just ran the deterministic twin world with curl only: portal login → invo
 ## 60 seconds — with one key
 
 ```bash
+sudo apt-get install -y tesseract-ocr   # one-time, for the screenshot OCR predicate
 export SOLARI_API_KEY=slr_live_...
 make doctor   # cheapest real launch; prints a session id; exits 0 (no hang)
-make demo     # the full three-surface vendor close
+make demo     # the full three-surface vendor close (~45s, ~$0.002 on Starter)
 ```
 
-While it runs (~3 min):
+While it runs:
 
 - The **desktop `streamUrl`** is printed the moment the desktop boots — open it and watch LibreOffice receive the exceptions live over VNC. The VM also records itself: `eval.json`'s `desktopRecordingUrl` is an mp4 of the whole desktop session (uploaded on `record.stop()`, harvested before dispose).
-- Expected cost: **~$0.14** on Starter (estimate from the published price sheet; printed at the end and in `eval.json`).
+- Expected cost: **~$0.002** on Starter (measured; the estimate uses the published price sheet and prints at the end in `eval.json`).
 - Expected exceptions: **exactly 2** (one transposed-digit amount, one invoice missing from the ledger — both seeded in `fixtures/`).
 
 When it finishes:

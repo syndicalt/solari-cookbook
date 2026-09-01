@@ -14,6 +14,7 @@ const CONFIG: NoapiConfig = {
   portalUser: "reviewer@getsolari.com",
   portalPassword: "reviewer",
   plan: "free",
+    portalMode: "local",
 };
 
 test("doctor without a key returns 2 and never fakes a passing run", async () => {

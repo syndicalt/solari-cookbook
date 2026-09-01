@@ -21,7 +21,7 @@ import {
   CALIBRATED_CLICK,
   SCREEN_CENTER,
   clickAndConfirm,
-  typeConfirmed,
+  typeWithSentinel,
 } from "../rewind/focus.ts";
 import { ScreenshotRing } from "../rewind/screenshots.ts";
 
@@ -34,6 +34,22 @@ const HEALTH_POLLS = 30;
 const HEALTH_INTERVAL_MS = 1_000;
 /** Window-map settle after `open()` before clicking (cookbook sleeps 4s). */
 const OPEN_SETTLE_MS = 4_000;
+
+/**
+ * Process-wide latch for the NOAPI_FORCE_FOCUS_MISS=1 hook (`make demo-flaky`).
+ * It must fire EXACTLY ONCE per process: the conductor's rewind creates a
+ * FRESH surface instance for the retry, so an instance-level flag would
+ * force the miss again on the retry and the run would never recover
+ * (observed live: two forced misses, attempts exhausted, run aborted).
+ */
+let forceMissConsumed = false;
+
+/** Returns true once per process when the force-miss hook is armed. */
+function consumeForceMiss(): boolean {
+  if (forceMissConsumed || process.env.NOAPI_FORCE_FOCUS_MISS !== "1") return false;
+  forceMissConsumed = true;
+  return true;
+}
 
 /**
  * Structural slice of the `@solarisdk/core` `Desktop` handle this surface
@@ -49,6 +65,8 @@ export interface DesktopLike {
    * once a recording has been started AND stopped (SDK docs, desktop.d.ts).
    */
   readonly recordingUrl?: string | undefined;
+  /** Opens the control channel — the Python cookbook calls connect() right after create; skipping it fails every later call with "Not connected". */
+  connect(): Promise<void>;
   health(): Promise<{ ready: boolean }>;
   exec(
     cmd: string,
@@ -151,7 +169,6 @@ export class SolariDesktopSurface implements DesktopSurface {
   #startedAt: number | null = null;
   #endedAt: number | null = null;
   #disposed = false;
-  #firstClickUsed = false;
   #recording = false;
 
   constructor(config: NoapiConfig, deps: SolariDesktopDeps = {}) {
@@ -215,6 +232,9 @@ export class SolariDesktopSurface implements DesktopSurface {
     this.#startedAt = Date.now();
     // Reviewers watch this — print before anything else can fail.
     console.log(`desktop.stream url=${desktop.streamUrl}`);
+    // Cookbook (desktop-computer-use-py): connect() right after create —
+    // opens the control channel; every later call fails without it.
+    await desktop.connect();
 
     // Wait for X11 before driving the GUI (cookbook: 30 × 1s health poll).
     for (let i = 0; i < HEALTH_POLLS; i++) {
@@ -251,9 +271,45 @@ export class SolariDesktopSurface implements DesktopSurface {
   }
 
   /**
+   * Wait until the screen has changed at least once since open AND then gone
+   * stable (two consecutive identical frames). LibreOffice cold start shows
+   * a STATIC splash first — a naive "stable screen" check returns during
+   * the splash, before the Text Import modal exists (verified live: clicks
+   * landed in a dialog that appeared later and toggled its checkboxes).
+   * Cap: 15 polls × 2s. Poll frames are NOT pushed to the rewind ring.
+   */
+  async #waitForSettle(): Promise<void> {
+    const desktop = this.#requireDesktop();
+    let prev = await desktop.screenshot({ format: "png" });
+    let changed = false;
+    for (let i = 0; i < 15; i++) {
+      await this.#sleep(2_000);
+      const shot = await desktop.screenshot({ format: "png" });
+      const sameAsPrev = shot.length === prev.length && shot.every((b, j) => b === prev[j]);
+      if (!sameAsPrev) {
+        changed = true;
+      } else if (changed) {
+        return;
+      }
+      prev = shot;
+    }
+  }
+
+  /**
+   * Probe whether `name` is runnable on the VM. The cookbook suggests
+   * `exec("command", args=["-v", name])`, but `command` is a shell BUILTIN,
+   * not a binary — the desktop agent executes argv directly, exactly like
+   * sandbox commands.run. Probe through `sh -c` or every probe fails and
+   * LibreOffice looks "missing" when it is installed (verified live).
+   */
+  async #probeBinary(desktop: DesktopLike, name: string): Promise<boolean> {
+    const r = await desktop.exec("sh", { args: ["-c", `command -v ${name}`] });
+    return r.exitCode === 0;
+  }
+
+  /**
    * Probe before open: the cookbook warns `open()` fails when the binary is
-   * not in the image, so check with `exec("command", args=["-v", name])`.
-   * LibreOffice is probed under both of its common names.
+   * not in the image. LibreOffice is probed under both of its common names.
    */
   async openApp(name: string): Promise<number> {
     const desktop = this.#requireDesktop();
@@ -262,8 +318,7 @@ export class SolariDesktopSurface implements DesktopSurface {
     const probed: string[] = [];
     for (const candidate of candidates) {
       probed.push(candidate);
-      const r = await desktop.exec("command", { args: ["-v", candidate] });
-      if (r.exitCode === 0) {
+      if (await this.#probeBinary(desktop, candidate)) {
         const pid = await desktop.open(candidate);
         console.log(`desktop.open app=${candidate} pid=${pid}`);
         return pid;
@@ -294,21 +349,11 @@ export class SolariDesktopSurface implements DesktopSurface {
   }
 
   /**
-   * Where the first click of a step lands. The NOAPI_FORCE_FOCUS_MISS=1 hook
-   * (`make demo-flaky`) sends the FIRST click to screen center (640, 360) —
-   * the cookbook's known-bad point — so the focus sentinel fires and the
-   * conductor's rewind path runs. Every subsequent click uses the calibrated
-   * top-left-quadrant point.
+   * Where the first click of a step lands. Normally the calibrated top-left
+   * point; under the force-miss hook, screen center (see consumeForceMiss).
    */
-  #clickPoint(): { x: number; y: number } {
-    if (!this.#firstClickUsed) {
-      this.#firstClickUsed = true;
-      if (process.env.NOAPI_FORCE_FOCUS_MISS === "1") {
-        console.log("desktop.force_focus_miss first_click=center");
-        return SCREEN_CENTER;
-      }
-    }
-    return CALIBRATED_CLICK;
+  #clickPoint(forceMiss: boolean): { x: number; y: number } {
+    return forceMiss ? SCREEN_CENTER : CALIBRATED_CLICK;
   }
 
   /**
@@ -335,11 +380,10 @@ export class SolariDesktopSurface implements DesktopSurface {
     await desktop.fs.write(csvRemote, csvBytes);
 
     // 2. Probe the LibreOffice binary (cookbook: open() fails if it is not in
-    //    the image, so check with exec("command", args=["-v", name])).
+    //    the image — but probe through sh, `command` is a builtin).
     let bin: string | null = null;
     for (const candidate of ["soffice", "libreoffice"]) {
-      const r = await desktop.exec("command", { args: ["-v", candidate] });
-      if (r.exitCode === 0) {
+      if (await this.#probeBinary(desktop, candidate)) {
         bin = candidate;
         break;
       }
@@ -350,25 +394,57 @@ export class SolariDesktopSurface implements DesktopSurface {
 
     // 3. GUI open for the VNC moment. If the GUI open fails we still produce
     //    the PDF headless AND still open the result for the proof screenshot.
+    //    The force-miss latch is consumed here (before any try/catch) so the
+    //    click point below agrees with the dialog handling.
+    const forceMiss = consumeForceMiss();
     let guiOk = true;
     try {
       const pid = await desktop.open(bin, ["--calc", csvRemote]);
       console.log(`desktop.open app=${bin} pid=${pid}`);
-      await this.#sleep(OPEN_SETTLE_MS);
+      // LibreOffice cold start takes seconds on a small VM, and opening a
+      // .csv raises the modal "Text Import" dialog FIRST. Verified live from
+      // run screenshots: keyboard Return does NOT reliably reach the dialog
+      // (no focused window yet), and our calibrated (320,300) click lands on
+      // the dialog's Language dropdown. Wait for the screen to settle past
+      // the static splash, then handle the dialog.
+      await this.#waitForSettle();
+      if (forceMiss) {
+        // Deterministic miss: CANCEL the Text Import modal — no document
+        // loads, the Calc Start Center sits there, and typing at screen
+        // center renders nothing. The retry (fresh desktop) takes the
+        // normal path. Simply leaving the modal up does NOT work: clicks
+        // toggle its checkboxes, the screen changes, and the byte-diff
+        // sentinel cannot tell "typed into a modal" from real focus.
+        console.log("desktop.force_focus_miss action=cancel_import_dialog first_click=center");
+        await desktop.mouse.click(848, 703, { humanize: true });
+        await this.#sleep(1_000);
+      } else {
+        // The CSV "Text Import" modal: click its OK button — bottom-right of
+        // the centered dialog at 1280x720. No dialog → harmless far-cell click.
+        await desktop.mouse.click(943, 703, { humanize: true });
+        await this.#sleep(1_000);
+        // First GUI launch also pops the "Tip of the Day" modal (centered,
+        // OK button at ~(873, 508)). Modal dialogs swallow clicks that land
+        // outside them, which would fail the sentinel next. Blind-dismiss:
+        // when there is no tip, this is just a harmless cell click.
+        await desktop.mouse.click(873, 508, { humanize: true });
+        await this.#sleep(500);
+      }
     } catch (err) {
       guiOk = false;
       console.log(`desktop.gui_fallback reason=${(err as Error).message}`);
     }
 
     if (guiOk) {
-      // 4. Click inside the window (NEVER screen center), confirm with a
-      //    screenshot, run the sentinel, then type the title for real. The
-      //    typed "EXCEPTIONS" line is what the screenshotContainsText
-      //    predicate OCRs later; the CSV artifact itself stays untouched.
-      const point = this.#clickPoint();
+      // 4. Sentinel-verified typing at the calibrated point (NEVER screen
+      //    center): commit sentinel, screenshot-diff, re-click, overwrite
+      //    with the real title. The typed "EXCEPTIONS" line is what the
+      //    screenshotContainsText predicate OCRs later; the CSV artifact
+      //    itself stays untouched. No keyboard chords — verified live that
+      //    hotkey("ctrl","z") delivers a literal "z" on this template.
+      const point = this.#clickPoint(forceMiss);
       const shot = () => this.screenshot("focus-probe");
-      await clickAndConfirm(desktop, point.x, point.y, { sleep: this.#sleep });
-      await typeConfirmed(desktop, shot, "EXCEPTIONS\n", { sleep: this.#sleep });
+      await typeWithSentinel(desktop, shot, point.x, point.y, "EXCEPTIONS", { sleep: this.#sleep });
       await this.screenshot("desktop-01-open");
     }
 

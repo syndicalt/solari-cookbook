@@ -16,8 +16,16 @@
  *
  * v0 is allowed to be dumb (AGENTS.md): the probe types {@link FOCUS_SENTINEL}
  * and compares PNG bytes before/after. Identical bytes means nothing
- * rendered, i.e. the keystrokes went nowhere. `src/eval/ocr.ts` upgrades this
- * to text-verified confirmation when a local `tesseract` binary is available.
+ * rendered, i.e. the keystrokes went nowhere.
+ *
+ * Sentinel cleanup is COMMIT-AND-OVERWRITE with clicks only. Verified live
+ * against a Solari desktop: `keyboard.type` does NOT translate "\n" into an
+ * Enter keypress (the formula bar showed the raw concatenation), and a
+ * `hotkey("ctrl","z")` chord was delivered as a literal "z". So the sentinel
+ * is committed by clicking a neutral cell ({@link COMMIT_CLICK}), the
+ * sentinel cell is re-clicked, and the real text is typed over it — typing
+ * on a selected cell replaces its content. Only click/type/screenshot are
+ * used; all three are proven on the real template.
  */
 import { FocusMissError } from "../types.ts";
 
@@ -37,6 +45,15 @@ export const CALIBRATED_CLICK = { x: 320, y: 300 } as const;
  * conductor's rewind path on demand.
  */
 export const SCREEN_CENTER = { x: 640, y: 360 } as const;
+
+/**
+ * A neutral far cell on the Calc grid (roughly F10 at 1280x720). Clicking it
+ * COMMITS an in-progress cell edit — verified live that `keyboard.type` does
+ * not translate "\n" into an Enter keypress (the formula bar showed the raw
+ * concatenation), and that keyboard chords are unreliable on the template.
+ * Click-to-commit uses only the two input primitives that are proven.
+ */
+export const COMMIT_CLICK = { x: 600, y: 450 } as const;
 
 /**
  * The slice of a Solari desktop handle the sentinel needs. Structural, so the
@@ -71,13 +88,12 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
 }
 
 /**
- * Dumb-reliable focus probe: screenshot, type the sentinel, settle,
- * screenshot again. Identical PNG bytes → nothing rendered → focus miss.
- *
- * On success the sentinel is undone with ctrl+z (best-effort — if the undo
- * fails we are no worse off than before the probe). On miss nothing is
- * undone here; the caller ({@link typeConfirmed}) attempts undo too, since a
- * partial render that still byte-compares equal is possible in theory.
+ * Dumb-reliable focus probe: screenshot, type the sentinel, click a neutral
+ * cell to COMMIT the edit (Enter via "\n" does not work — see COMMIT_CLICK),
+ * settle, screenshot again. Identical PNG bytes → nothing rendered → focus
+ * miss. On success the sentinel sits in the document; callers remove it by
+ * overwriting ({@link typeWithSentinel}). No keyboard chords are used —
+ * verified live that hotkey("ctrl","z") delivered a literal "z".
  *
  * @param shot Screenshot function (usually the surface's ring-pushing one).
  */
@@ -91,24 +107,17 @@ export async function confirmFocus(
 
   const before = await shot();
   await desktop.keyboard.type(FOCUS_SENTINEL);
+  await desktop.mouse.click(COMMIT_CLICK.x, COMMIT_CLICK.y, { humanize: true });
   await sleep(waitMs);
   const after = await shot();
 
-  if (bytesEqual(before, after)) {
-    return false;
-  }
-  try {
-    await desktop.keyboard.hotkey("ctrl", "z");
-  } catch {
-    // best-effort undo — the probe already proved focus, a failed undo is cosmetic
-  }
-  return true;
+  return !bytesEqual(before, after);
 }
 
 /**
  * Click and capture the result. Used before typing real content; the returned
  * shot is both proof and rewind material. Does NOT itself confirm focus —
- * pair it with {@link typeConfirmed} / {@link confirmFocus}.
+ * pair it with {@link typeWithSentinel} / {@link confirmFocus}.
  */
 export async function clickAndConfirm(
   desktop: DesktopLike,
@@ -128,29 +137,38 @@ export interface TypeConfirmedOpts extends FocusOpts {
 }
 
 /**
- * Confirm focus, then type `text` for real. Throws {@link FocusMissError}
- * when the sentinel does not change the screen — callers (the conductor)
- * catch it and rewind the step instead of typing into the void.
+ * The full sentinel flow for typing `text` at (x, y):
+ *
+ *   1. click (x, y)                       — focus the cell/field
+ *   2. type FOCUS_SENTINEL                — probe text
+ *   3. click COMMIT_CLICK                 — commit the edit (no Enter key!)
+ *   4. screenshot diff                    — proof the keystrokes rendered
+ *   5. click (x, y) again                 — reselect the sentinel cell
+ *   6. type `text`                        — overwrites the sentinel
+ *   7. click COMMIT_CLICK                 — commit the real content
+ *
+ * Throws {@link FocusMissError} at step 4 when the screen did not change —
+ * the conductor catches it and rewinds the step instead of typing into the
+ * void. Only click/type/screenshot are used: every one of them is proven on
+ * the real template, while "\n" and chords are proven NOT to work.
  */
-export async function typeConfirmed(
+export async function typeWithSentinel(
   desktop: DesktopLike,
   shot: () => Promise<Uint8Array>,
+  x: number,
+  y: number,
   text: string,
   opts: TypeConfirmedOpts = {},
 ): Promise<void> {
+  await clickAndConfirm(desktop, x, y, opts);
   const ok = await confirmFocus(desktop, shot, opts);
   if (!ok) {
-    try {
-      // a miss means the keystrokes went elsewhere; undo is usually a no-op
-      // but guards against a partial render that byte-compared equal
-      await desktop.keyboard.hotkey("ctrl", "z");
-    } catch {
-      // best-effort
-    }
     throw new FocusMissError(
       "focus sentinel did not render — click missed the target window",
       opts.screenshotPath,
     );
   }
+  await clickAndConfirm(desktop, x, y, opts);
   await desktop.keyboard.type(text);
+  await clickAndConfirm(desktop, COMMIT_CLICK.x, COMMIT_CLICK.y, opts);
 }

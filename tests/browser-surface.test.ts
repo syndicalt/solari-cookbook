@@ -33,6 +33,7 @@ function config(overrides: Partial<NoapiConfig> = {}): NoapiConfig {
     portalUser: "reviewer@getsolari.com",
     portalPassword: "reviewer",
     plan: "free",
+    portalMode: "local",
     ...overrides,
   };
 }
@@ -93,6 +94,11 @@ class FakePage implements PageLike {
   }
   async setInputFiles(selector: string, files: string): Promise<void> {
     this.calls.push({ m: "setInputFiles", selector, files });
+  }
+  evaluateCalls = 0;
+  async evaluate(_script: string): Promise<unknown> {
+    this.evaluateCalls += 1;
+    return 1;
   }
   context(): { storageState(): Promise<StorageStateLike> } {
     return { storageState: async () => this.storageStateValue };
@@ -219,6 +225,17 @@ test("start launches with recording:true", async () => {
   assert.equal(surface.sessionId, "sess-1");
   assert.ok(surface.secondsUsed() >= 0);
   await surface.dispose();
+});
+
+test("heartbeat touches the page on an interval and stops at dispose", async () => {
+  const { solari, surface } = harness();
+  await surface.start({ recording: true, heartbeatMs: 5 });
+  await new Promise((r) => setTimeout(r, 30));
+  assert.ok(solari.lastBrowser.page.evaluateCalls >= 2, "idle-timeout heartbeat must fire");
+  await surface.dispose();
+  const stopped = solari.lastBrowser.page.evaluateCalls;
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(solari.lastBrowser.page.evaluateCalls, stopped, "heartbeat must stop after dispose");
 });
 
 test("starter plan requests stealth; failure degrades to a plain relaunch", async () => {

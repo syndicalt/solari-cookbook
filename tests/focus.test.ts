@@ -14,7 +14,7 @@ import {
   SCREEN_CENTER,
   clickAndConfirm,
   confirmFocus,
-  typeConfirmed,
+  typeWithSentinel,
   type DesktopLike,
 } from "../src/rewind/focus.ts";
 import { ScreenshotRing } from "../src/rewind/screenshots.ts";
@@ -63,40 +63,52 @@ test("cookbook click points are the documented constants", () => {
   assert.deepEqual(SCREEN_CENTER, { x: 640, y: 360 });
 });
 
-test("identical before/after screenshots → focus miss, FocusMissError, undo attempted", async () => {
+test("identical before/after screenshots → focus miss, FocusMissError, no chords sent", async () => {
   const fake = makeFocusFake([PNG_A, PNG_A]); // typing changed nothing
   const shot = () => fake.desktop.screenshot();
 
   const ok = await confirmFocus(fake.desktop, shot, { sleep: noSleep });
   assert.equal(ok, false);
   assert.deepEqual(fake.types, [FOCUS_SENTINEL]);
+  // commit is a click on the neutral cell, not an Enter keypress
+  assert.deepEqual(fake.clicks.map((c) => [c.x, c.y]), [[600, 450]]);
 
   await assert.rejects(
-    typeConfirmed(fake.desktop, shot, "real content", { sleep: noSleep }),
+    typeWithSentinel(fake.desktop, shot, 320, 300, "real content", { sleep: noSleep }),
     (err: unknown) => {
       assert.ok(err instanceof FocusMissError);
       return true;
     },
   );
-  // typeConfirmed attempts the best-effort undo on the failure path
-  assert.deepEqual(fake.hotkeys, [["ctrl", "z"]]);
+  // commit-and-overwrite flow: chords are never sent (live chord failure —
+  // hotkey("ctrl","z") delivered a literal "z" on the real template)
+  assert.deepEqual(fake.hotkeys, []);
 });
 
-test("differing screenshots → focus ok, sentinel undone with ctrl+z, real text typed", async () => {
-  const fake = makeFocusFake([PNG_A, PNG_B]);
+test("differing screenshots → click, sentinel committed by click, re-click, overwrite", async () => {
+  // The fake serves screenshots in order: clickAndConfirm consumes the
+  // first; confirmFocus then diffs #2 vs #3 — differing → focus ok.
+  const fake = makeFocusFake([PNG_A, PNG_A, PNG_B]);
   const shot = () => fake.desktop.screenshot();
 
-  await typeConfirmed(fake.desktop, shot, "EXCEPTIONS\n", { sleep: noSleep });
+  await typeWithSentinel(fake.desktop, shot, 320, 300, "EXCEPTIONS", { sleep: noSleep });
 
-  assert.deepEqual(fake.types, [FOCUS_SENTINEL, "EXCEPTIONS\n"]);
-  assert.deepEqual(fake.hotkeys, [["ctrl", "z"]]);
+  assert.deepEqual(fake.types, [FOCUS_SENTINEL, "EXCEPTIONS"]);
+  assert.deepEqual(fake.hotkeys, []);
+  // focus click, commit click, reselect click, commit click
+  assert.deepEqual(fake.clicks.map((c) => [c.x, c.y]), [
+    [320, 300],
+    [600, 450],
+    [320, 300],
+    [600, 450],
+  ]);
 });
 
 test("FocusMissError carries the screenshot path when provided", async () => {
   const fake = makeFocusFake([PNG_A, PNG_A]);
   const shot = () => fake.desktop.screenshot();
   await assert.rejects(
-    typeConfirmed(fake.desktop, shot, "x", { sleep: noSleep, screenshotPath: "artifacts/r1/desktop-99.png" }),
+    typeWithSentinel(fake.desktop, shot, 320, 300, "x", { sleep: noSleep, screenshotPath: "artifacts/r1/desktop-99.png" }),
     (err: unknown) => {
       assert.ok(err instanceof FocusMissError);
       assert.equal(err.screenshotPath, "artifacts/r1/desktop-99.png");

@@ -6,8 +6,10 @@ NOAPI is a reliability-first conductor that treats Solari's cloud **browser**, *
 
 ```bash
 export SOLARI_API_KEY=slr_live_...   # https://console.getsolari.com
-make demo                            # ~3 min, ~$0.14 on Starter
+make demo                            # ~45s, ~$0.002 on Starter (measured)
 ```
+
+Prerequisites for the scored run: Node 22+, and `tesseract` on PATH for the screenshot OCR predicate (`sudo apt-get install tesseract-ocr`). The conductor serves the portal from inside the run's own sandbox (`previewUrl`), so a cloud browser never needs to reach your localhost — and a one-VM account works too.
 
 No key? `make demo-offline` runs the whole twin world with curl — no Solari, no cost.
 
@@ -53,9 +55,9 @@ Most computer-use demos restart the world on failure. NOAPI restarts the step:
 | Sandbox | VM snapshot / revert | After `reconcile` succeeds, the VM is snapshotted (`close-numbers-ok`). If the desktop step fails, the parse is not rerun — the conductor reverts and resumes at `format` |
 | Desktop | Screenshot ring buffer | Last 10 frames kept; on a focus miss the failed GUI session is discarded, the frames are saved, and the click is replanned |
 
-The policy is data (`src/rewind/policy.ts`): rewind on `desktop.focus_miss` / `desktop.app_not_ready` up to 2 attempts; never rewind on `budget_exceeded` or `portal_rejected_auth`; always keep failed artifacts.
+The policy is data (`src/rewind/policy.ts`): rewind on `desktop.focus_miss` / `desktop.app_not_ready` up to 2 attempts; never rewind on `budget_exceeded` or `portal_rejected_auth`; always keep failed artifacts. Snapshot **revert** on rewind is opt-in (`NOAPI_REWIND_REVERT=1`) — on the current pool a revert attempt itself disrupts the VM (measured live: heartbeats fail, preview portal 404s), and it is protective-only since nothing writes to the sandbox after the snapshot.
 
-`make demo-flaky` forces the classic cookbook landmine — a first click at screen center (640,360) on a 1280×720 display, which focuses the window *behind* LibreOffice — and the run still finishes green with `rewinds: 1`.
+`make demo-flaky` forces a real desktop focus miss — the CSV **Text Import modal is canceled**, so no document loads and typing into the Start Center renders nothing — and the run still finishes green with `rewinds: 1` (verified live).
 
 ## Cookbook conformance
 
@@ -95,9 +97,9 @@ MANIFEST.sha256     # sha256 of every artifact — verify with `sha256sum -c`
 
 ## Cost
 
-Budget is a hard guard, not a dashboard metric. `src/budget.ts` carries the published rates from <https://docs.getsolari.com/pricing> (browser $0.10/hr, 1vCPU/2GB sandbox $0.057/hr, desktop = sandbox + $0.02/hr live screen, on Starter) and the conductor refuses the next surface when the projected total would exceed `scenario.budgetUsd` ($0.50 for the default scenario). A typical green run estimates at **~$0.14**.
+Budget is a hard guard, not a dashboard metric. `src/budget.ts` carries the published rates from <https://docs.getsolari.com/pricing> (browser $0.10/hr, 1vCPU/2GB sandbox $0.057/hr, desktop = sandbox + $0.02/hr live screen, on Starter) and the conductor refuses the next surface when the projected total would exceed `scenario.budgetUsd` ($0.50 for the default scenario). Measured on live runs: **~$0.002 per green run, ~45s wall** (browser ~35s, sandbox ~35s, desktop ~20s).
 
-Free-plan degrade is built in: stealth/proxy/captcha are skipped on a failed stealth launch, and the dashboard preview falls back to the local `dashboard.html` (Free allows one concurrent sandbox, which reconciliation already used).
+Free-plan degrade is built in: stealth/proxy/captcha are skipped on a failed stealth launch, and the dashboard preview falls back to the local `dashboard.html` (Free allows one concurrent sandbox, which reconciliation already used). Desktops themselves are Starter+ — on a Free key the run aborts cleanly at the desktop step with `Desktop requires a paid plan` (verified live).
 
 ## Commands
 

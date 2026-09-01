@@ -75,6 +75,7 @@ test("resolveConfig applies documented defaults", () => {
     portalUser: "reviewer@getsolari.com",
     portalPassword: "reviewer",
     plan: "free",
+    portalMode: "local",
   });
 });
 
@@ -85,12 +86,16 @@ test("resolveConfig reads the environment", () => {
     NOAPI_PORTAL_USER: "u@x.com",
     NOAPI_PORTAL_PASSWORD: "pw",
     NOAPI_PLAN: "starter",
+    NOAPI_PORTAL: "sandbox",
   });
   assert.equal(config.solariApiKey, "slr_live_test");
   assert.equal(config.portalOrigin, "http://127.0.0.1:9999");
   assert.equal(config.portalUser, "u@x.com");
   assert.equal(config.portalPassword, "pw");
   assert.equal(config.plan, "starter");
+  assert.equal(config.portalMode, "sandbox");
+  // Anything but "sandbox" keeps the local portal mode.
+  assert.equal(resolveConfig({ NOAPI_PORTAL: "remote" }).portalMode, "local");
   // Anything but "starter" degrades to free.
   assert.equal(resolveConfig({ NOAPI_PLAN: "enterprise" }).plan, "free");
 });

@@ -38,6 +38,7 @@ async function boot(t: test.TestContext): Promise<Boot> {
     portalUser: "reviewer@getsolari.com",
     portalPassword: "reviewer",
     plan: "starter",
+    portalMode: "local",
   };
   return { portal, config, artifactsRoot, scenario: loadScenario("scenarios/vendor-close.json") };
 }
@@ -133,9 +134,34 @@ test("conductor happy path — green eval.json, full artifact pack", async (t) =
   assert.equal(created.browsers[0]!.startOpts?.recording, true);
 });
 
+test("conductor portal-sandbox mode — one VM serves the portal AND reconciles", async (t) => {
+  const { config, artifactsRoot, scenario } = await boot(t);
+  const sandboxConfig: NoapiConfig = { ...config, portalMode: "sandbox" };
+  const { factory, created } = makeFakeFactory(sandboxConfig);
+
+  const report = await runScenario(scenario, sandboxConfig, {
+    surfaces: factory,
+    artifactsRoot,
+    predicateDeps,
+    logger: silentLogger,
+  });
+
+  assert.equal(report.ok, true, `predicates: ${JSON.stringify(report.predicates)}`);
+  // The portal was served by the sandbox before any browser step ran...
+  assert.equal(created.sandboxes.length, 1, "exactly one sandbox — the 1-VM-account shape");
+  assert.deepEqual(created.sandboxes[0]!.portalServes, [8787]);
+  // ...and the same VM then ran reconciliation.
+  assert.equal(created.sandboxes[0]!.reconcileCalls.length, 1);
+  // All six steps still completed, incl. the portal-backed browser steps.
+  assert.ok(csvDataRows(join(artifactsRoot, report.runId, "exceptions.csv")) === 2);
+});
+
 test("conductor rewind — focus miss rewinds the step, run still goes green", async (t) => {
   const { config, artifactsRoot, scenario } = await boot(t);
   const { factory, created } = makeFakeFactory(config, { failFirstFormat: "focus" });
+  // Exercise the opt-in revert path; restore the default (unset) afterwards.
+  process.env.NOAPI_REWIND_REVERT = "1";
+  t.after(() => delete process.env.NOAPI_REWIND_REVERT);
 
   const report = await runScenario(scenario, config, {
     surfaces: factory,
@@ -160,7 +186,8 @@ test("conductor rewind — focus miss rewinds the step, run still goes green", a
   assert.equal(formatFails.length, 1);
   assert.match((formatFails[0] as { error: string }).error, /focus/);
 
-  // The sandbox snapshot was reverted, not the universe.
+  // The sandbox snapshot was reverted, not the universe (revert is opt-in:
+  // NOAPI_REWIND_REVERT=1 — on the live pool a revert attempt disrupts the VM).
   assert.equal(created.sandboxes.length, 1);
   assert.deepEqual(created.sandboxes[0]!.reverts, ["snap-fake-001"]);
 
@@ -176,6 +203,24 @@ test("conductor rewind — focus miss rewinds the step, run still goes green", a
   assert.equal(onDisk.ok, true);
   assert.equal(onDisk.rewinds, 1);
   assert.deepEqual(verifyManifest(dir), { ok: true, mismatches: [] });
+});
+
+test("conductor rewind without NOAPI_REWIND_REVERT skips the destructive revert", async (t) => {
+  const { config, artifactsRoot, scenario } = await boot(t);
+  const { factory, created } = makeFakeFactory(config, { failFirstFormat: "focus" });
+  delete process.env.NOAPI_REWIND_REVERT;
+
+  const report = await runScenario(scenario, config, {
+    surfaces: factory,
+    artifactsRoot,
+    predicateDeps,
+    logger: silentLogger,
+  });
+
+  assert.equal(report.ok, true);
+  assert.equal(report.rewinds, 1);
+  assert.deepEqual(created.sandboxes[0]!.reverts, [], "default policy must not attempt revert");
+  assert.equal(created.desktops.length, 2);
 });
 
 test("conductor budget guard — microscopic budget aborts before any surface", async (t) => {

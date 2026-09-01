@@ -23,10 +23,10 @@ portal:
 	$(NODE) apps/portal/server.ts
 
 demo:
-	$(NODE) src/cli.ts run scenarios/vendor-close.json
+	./scripts/demo-live.sh
 
 demo-flaky:
-	NOAPI_FORCE_FOCUS_MISS=1 $(NODE) src/cli.ts run scenarios/vendor-close.json
+	NOAPI_FORCE_FOCUS_MISS=1 ./scripts/demo-live.sh
 
 demo-offline:
 	./scripts/offline-close.sh

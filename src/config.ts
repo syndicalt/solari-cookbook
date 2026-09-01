@@ -36,6 +36,7 @@ export function resolveConfig(env: NodeJS.ProcessEnv = process.env): NoapiConfig
     // Free-plan degrade is the safe default until a paid feature succeeds;
     // surfaces flip this to "starter" on the first stealth-capable launch.
     plan: env.NOAPI_PLAN === "starter" ? "starter" : "free",
+    portalMode: env.NOAPI_PORTAL === "sandbox" ? "sandbox" : "local",
   };
 }
 

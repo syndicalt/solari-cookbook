@@ -12,3 +12,4 @@ artifacts/*
 !artifacts/.gitkeep
 recordings/
 coverage/
+build/

@@ -30,6 +30,7 @@ const CONFIG: NoapiConfig = {
   portalUser: "reviewer@getsolari.com",
   portalPassword: "reviewer",
   plan: "free",
+    portalMode: "local",
 };
 
 test("predicateName renders every kind", () => {
@@ -94,8 +95,13 @@ test("screenshotContainsText with an injected ocr", async () => {
     writeFileSync(join(dir, "desktop-final.png"), TINY_PNG);
     const p = { kind: "screenshotContainsText", path: "desktop-final.png", text: "EXCEPTIONS" } as const;
 
-    const found = await evaluatePredicate(p, dir, CONFIG, { ocr: async () => "exceptions — june 2026" });
-    assert.equal(found.ok, true, "match is case-insensitive");
+    const found = await evaluatePredicate(p, dir, CONFIG, { ocr: async () => "EXCEPTIONS — june 2026" });
+    assert.equal(found.ok, true);
+
+    // Case-SENSITIVE: lowercase "exceptions.csv" in a window title must NOT
+    // satisfy the predicate (observed vacuous pass on a real flaky run).
+    const vacuous = await evaluatePredicate(p, dir, CONFIG, { ocr: async () => "exceptions.csv - LibreOffice Calc" });
+    assert.equal(vacuous.ok, false, "lowercase window title must not match");
 
     const notFound = await evaluatePredicate(p, dir, CONFIG, { ocr: async () => "blank screen" });
     assert.equal(notFound.ok, false);
