@@ -1,0 +1,27 @@
+{
+  "name": "noapi",
+  "version": "0.1.0",
+  "description": "Reliability-first conductor that treats Solari cloud browser, sandbox, and desktop as one machine.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "noapi": "node src/cli.ts",
+    "doctor": "node src/cli.ts doctor",
+    "portal": "node apps/portal/server.ts",
+    "test": "node --test 'tests/**/*.test.ts'",
+    "coverage": "node --test --experimental-test-coverage 'tests/**/*.test.ts'",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@solarisdk/browser": "^0.1.1",
+    "@solarisdk/desktop": "^0.1.2",
+    "@solarisdk/sdk": "^0.1.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.7.2"
+  }
+}

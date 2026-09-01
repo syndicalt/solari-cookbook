@@ -1,0 +1,6 @@
+# noapi reconciliation policy (v0)
+# flat key: value lines only — fixtures/reconcile.py parses this by hand,
+# so no nesting, no lists, no quotes.
+currency: USD
+amount_tolerance: 0.01
+period: 2026-06

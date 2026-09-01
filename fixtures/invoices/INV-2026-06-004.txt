@@ -1,0 +1,5 @@
+invoice: INV-2026-06-004
+vendor: Initech Supplies
+amount: 430.00
+currency: USD
+due: 2026-07-20

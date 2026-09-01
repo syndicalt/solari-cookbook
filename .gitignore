@@ -6,3 +6,9 @@ __pycache__/
 .venv/
 venv/
 screenshot.png
+
+# NOAPI run output — evidence packs and recordings are never committed.
+artifacts/*
+!artifacts/.gitkeep
+recordings/
+coverage/

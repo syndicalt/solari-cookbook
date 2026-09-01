@@ -1,0 +1,5 @@
+invoice: INV-2026-06-001
+vendor: Acme Industrial
+amount: 1200.00
+currency: USD
+due: 2026-07-15

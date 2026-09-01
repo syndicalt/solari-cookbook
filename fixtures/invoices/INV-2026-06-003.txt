@@ -1,0 +1,5 @@
+invoice: INV-2026-06-003
+vendor: Globex Logistics
+amount: 2190.75
+currency: USD
+due: 2026-07-20

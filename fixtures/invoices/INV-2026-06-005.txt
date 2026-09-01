@@ -1,0 +1,5 @@
+invoice: INV-2026-06-005
+vendor: Umbrella Freight
+amount: 655.20
+currency: USD
+due: 2026-07-31

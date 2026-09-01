@@ -1,0 +1,25 @@
+{
+  "id": "vendor-close",
+  "title": "June 2026 vendor close",
+  "budgetUsd": 0.5,
+  "timeoutMs": 240000,
+  "fixtures": {
+    "ledger": "fixtures/ledger.csv",
+    "policy": "fixtures/policy.yaml"
+  },
+  "success": [
+    { "kind": "fileExists", "path": "exceptions.csv" },
+    { "kind": "fileExists", "path": "close-pack.pdf" },
+    { "kind": "portalAccepted", "url": "/close/last" },
+    { "kind": "rowCount", "path": "exceptions.csv", "min": 1 },
+    { "kind": "screenshotContainsText", "path": "desktop-final.png", "text": "EXCEPTIONS" }
+  ],
+  "steps": [
+    { "id": "login", "surface": "browser", "action": "loginPortal" },
+    { "id": "pull", "surface": "browser", "action": "downloadInvoices" },
+    { "id": "reconcile", "surface": "sandbox", "action": "reconcileLedger" },
+    { "id": "snapshot", "surface": "sandbox", "action": "snapshot", "name": "close-numbers-ok" },
+    { "id": "format", "surface": "desktop", "action": "formatLibreOffice" },
+    { "id": "file", "surface": "browser", "action": "uploadPack" }
+  ]
+}

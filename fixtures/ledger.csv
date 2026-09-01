@@ -1,0 +1,5 @@
+invoice,vendor,amount,due
+INV-2026-06-001,Acme Industrial,1200.00,2026-07-15
+INV-2026-06-002,Northwind Traders,485.50,2026-07-15
+INV-2026-06-003,Globex Logistics,2190.75,2026-07-20
+INV-2026-06-004,Initech Supplies,430.00,2026-07-20

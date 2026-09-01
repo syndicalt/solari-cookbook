@@ -1,0 +1,5 @@
+invoice: INV-2026-06-002
+vendor: Northwind Traders
+amount: 845.50
+currency: USD
+due: 2026-07-15
